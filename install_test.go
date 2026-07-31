@@ -93,6 +93,21 @@ func TestBinNames(t *testing.T) {
 	}
 }
 
+func TestResolveBinPath(t *testing.T) {
+	// On non-windows hosts ResolveBinPath is the identity, regardless of what
+	// sits on disk. (The ".exe" preference is exercised on the windows runner.)
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tool")
+	_ = os.WriteFile(bin, []byte("x"), 0o755)
+	if got := ResolveBinPath(bin); got != bin {
+		t.Errorf("ResolveBinPath = %q, want %q", got, bin)
+	}
+	// A path that already carries .exe is returned verbatim on every platform.
+	if got := ResolveBinPath(bin + ".exe"); got != bin+".exe" {
+		t.Errorf("ResolveBinPath(.exe) = %q", got)
+	}
+}
+
 func TestIsELF(t *testing.T) {
 	dir := t.TempDir()
 	elfp := filepath.Join(dir, "elf")

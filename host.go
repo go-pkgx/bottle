@@ -12,6 +12,8 @@ func goos() string {
 	switch runtime.GOOS {
 	case "darwin":
 		return "darwin"
+	case "windows":
+		return "windows"
 	default:
 		return "linux"
 	}
@@ -29,7 +31,8 @@ func goarch() string {
 	}
 }
 
-// GOOS returns the pkgx OS slug ("linux" or "darwin") for the running machine.
+// GOOS returns the pkgx OS slug ("linux", "darwin", or "windows") for the
+// running machine.
 func GOOS() string { return goos() }
 
 // GOARCH returns the pkgx architecture slug (e.g. "x86-64", "aarch64") for the

@@ -5,11 +5,31 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 )
 
-// Exec replaces the current process image; overridable in tests.
-var Exec = syscall.Exec
+// Exec runs (or, on UNIX, replaces the current process image with) the target
+// binary; overridable in tests. Its concrete value is platform-specific:
+//   - UNIX (exec_unix.go): syscall.Exec — replaces the process, never returns
+//     on success.
+//   - Windows (exec_windows.go): spawns the child with inherited stdio, waits,
+//     and exits the parent with the child's exit code (Windows has no execve).
+//
+// The signature is identical on every platform, so callers are unchanged.
+var Exec func(argv0 string, argv []string, env []string) error
+
+// ResolveBinPath maps a logical bin path (…/bin/foo) to the file that actually
+// exists on disk. On Windows it prefers "foo.exe" (the PE image the toolchain
+// produces), falling back to the bare name; on UNIX it is the identity. This
+// keeps BinNames/PrimaryBin returning logical, extension-free names while the
+// run/stub sites resolve to the real executable.
+func ResolveBinPath(bin string) string {
+	if goos() == "windows" && !strings.HasSuffix(bin, ".exe") {
+		if _, err := os.Stat(bin + ".exe"); err == nil {
+			return bin + ".exe"
+		}
+	}
+	return bin
+}
 
 // BinNames returns the base names of the binaries a package provides, falling
 // back to the project's leaf name when it declares no `provides:`.
@@ -107,9 +127,11 @@ func StubBins(closure []Resolved, dir, prefix string) (int, error) {
 	return n, nil
 }
 
-// LibPath returns a ":"-joined library path covering every lib dir in an
-// installed closure (including glibc's versioned sub-libdir).
-func LibPath(closure []Resolved, dir string) string {
+// LibDirs returns every library directory in an installed closure (including
+// glibc's versioned sub-libdir on linux). It is the list form of LibPath, used
+// where an OS-native path separator is required (Windows joins with ";" and
+// resolves DLLs from these dirs via PATH, so a ":"-joined string is wrong).
+func LibDirs(closure []Resolved, dir string) []string {
 	var paths []string
 	for _, r := range closure {
 		prefix := filepath.Join(dir, r.Project, "v"+r.Version.Raw)
@@ -122,7 +144,15 @@ func LibPath(closure []Resolved, dir string) string {
 			paths = append(paths, matches...)
 		}
 	}
-	return strings.Join(paths, ":")
+	return paths
+}
+
+// LibPath returns a ":"-joined library path covering every lib dir in an
+// installed closure (including glibc's versioned sub-libdir). It is the value
+// of $LD_LIBRARY_PATH used on linux; on Windows use LibDirs with the native
+// separator instead.
+func LibPath(closure []Resolved, dir string) string {
+	return strings.Join(LibDirs(closure, dir), ":")
 }
 
 // LoaderName is the dynamic-loader soname for the current architecture.
