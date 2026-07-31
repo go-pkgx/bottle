@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: go vet ./...
+      - run: go test -race -coverprofile=cov.out ./...
+      - run: go tool cover -func=cov.out | tail -1
+
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin]
+        goarch: [amd64, arm64]
+        include:
+          - goos: linux
+            goarch: riscv64
+          - goos: linux
+            goarch: ppc64le
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      # A CGO_ENABLED=0 build must be fully static on every 64-bit target,
+      # so pkgm can ship on a `FROM scratch` image for each arch.
+      - env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build ./...
