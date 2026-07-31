@@ -15,11 +15,25 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
-// Base URLs for the pkgx distribution + pantry; overridable in tests.
+// Base URLs for the pkgx distribution + pantry; overridable in tests, and at
+// runtime via $PKGX_DIST / $PKGX_PANTRY so a consumer can point pkgm/pkgx at a
+// local mirror produced by the `mirror` tool.
 var (
 	DistBase   = "https://dist.pkgx.dev"
 	PantryBase = "https://raw.githubusercontent.com/pkgxdev/pantry/main/projects"
 )
+
+func init() { applyEnv(os.Getenv) }
+
+// applyEnv overrides DistBase/PantryBase from PKGX_DIST/PKGX_PANTRY (testable).
+func applyEnv(get func(string) string) {
+	if d := get("PKGX_DIST"); d != "" {
+		DistBase = strings.TrimRight(d, "/")
+	}
+	if p := get("PKGX_PANTRY"); p != "" {
+		PantryBase = strings.TrimRight(p, "/")
+	}
+}
 
 // Dir resolves the bottle store (PKGX_DIR, default ~/.pkgx).
 func Dir() string {
@@ -157,9 +171,17 @@ func httpGet(url string) ([]byte, error) {
 	return io.ReadAll(resp.Body)
 }
 
-// FetchVersions returns the available versions of a project, ascending.
+// FetchVersions returns the available versions of a project for the host
+// os/arch, ascending.
 func FetchVersions(project string) ([]Ver, error) {
 	osn, arch := HostSlug()
+	return VersionsFor(project, osn, arch)
+}
+
+// VersionsFor returns the available versions of a project for an explicit pkgx
+// os/arch slug (e.g. "linux"/"aarch64"), ascending. Used by mirror tooling that
+// spans arches other than the host's.
+func VersionsFor(project, osn, arch string) ([]Ver, error) {
 	body, err := httpGet(fmt.Sprintf("%s/%s/%s/%s/versions.txt", DistBase, project, osn, arch))
 	if err != nil {
 		return nil, err
@@ -184,6 +206,34 @@ func PickVersion(project, constraint string) (Ver, error) {
 		}
 	}
 	return Ver{}, fmt.Errorf("no version of %s satisfies %q (available: %d)", project, constraint, len(vs))
+}
+
+// Satisfies reports whether the version meets a pkgx constraint
+// ("^1.2", "~2", ">=1.0", "=1.2.3", "*", or "").
+func (v Ver) Satisfies(constraint string) bool { return v.satisfies(constraint) }
+
+// DownloadBottle fetches the raw compressed bottle tarball for a specific
+// project/version/os/arch, trying .tar.gz then .tar.xz. It returns the bytes
+// and the extension that succeeded (".tar.gz" or ".tar.xz") — for mirror tooling
+// that copies bottles verbatim without extracting them.
+func DownloadBottle(project, ver, osn, arch string) ([]byte, string, error) {
+	base := fmt.Sprintf("%s/%s/%s/%s/v%s", DistBase, project, osn, arch, ver)
+	for _, ext := range []string{".tar.gz", ".tar.xz"} {
+		resp, err := HTTPClient.Get(base + ext)
+		if err != nil {
+			return nil, "", err
+		}
+		if resp.StatusCode == 200 {
+			data, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				return nil, "", err
+			}
+			return data, ext, nil
+		}
+		resp.Body.Close()
+	}
+	return nil, "", fmt.Errorf("no bottle for %s v%s (%s/%s)", project, ver, osn, arch)
 }
 
 // --- package.yml (dependencies + provides) ----------------------------------
