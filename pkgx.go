@@ -2,6 +2,7 @@ package bottle
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/ulikunitz/xz"
 	yaml "gopkg.in/yaml.v3"
@@ -24,6 +26,29 @@ var (
 )
 
 func init() { applyEnv(os.Getenv) }
+
+// ociClientCache memoises OCIClients by dist base so the bearer-token cache is
+// reused across calls (and rebuilds automatically when DistBase changes, e.g. in
+// tests or when a consumer re-points PKGX_DIST).
+var (
+	ociClientCache = map[string]*OCIClient{}
+	ociClientMu    sync.Mutex
+)
+
+// ociClientForDist returns the OCIClient for the current DistBase, cached.
+func ociClientForDist() (*OCIClient, error) {
+	ociClientMu.Lock()
+	defer ociClientMu.Unlock()
+	if c, ok := ociClientCache[DistBase]; ok {
+		return c, nil
+	}
+	c, err := NewOCIClient(DistBase)
+	if err != nil {
+		return nil, err
+	}
+	ociClientCache[DistBase] = c
+	return c, nil
+}
 
 // applyEnv overrides DistBase/PantryBase from PKGX_DIST/PKGX_PANTRY (testable).
 func applyEnv(get func(string) string) {
@@ -182,6 +207,9 @@ func FetchVersions(project string) ([]Ver, error) {
 // os/arch slug (e.g. "linux"/"aarch64"), ascending. Used by mirror tooling that
 // spans arches other than the host's.
 func VersionsFor(project, osn, arch string) ([]Ver, error) {
+	if IsOCI(DistBase) {
+		return ociVersionsFor(project)
+	}
 	body, err := httpGet(fmt.Sprintf("%s/%s/%s/%s/versions.txt", DistBase, project, osn, arch))
 	if err != nil {
 		return nil, err
@@ -189,6 +217,27 @@ func VersionsFor(project, osn, arch string) ([]Ver, error) {
 	var vs []Ver
 	for _, line := range strings.Fields(string(body)) {
 		vs = append(vs, ParseVer(line))
+	}
+	sort.Slice(vs, func(i, j int) bool { return cmpVer(vs[i], vs[j]) < 0 })
+	return vs, nil
+}
+
+// ociVersionsFor lists a project's versions from an OCI registry (the repo's
+// tags), ascending. The tag list is not per-arch — a version that lacks a bottle
+// for the requested platform simply fails at download time, mirroring how the
+// static tree 404s a missing per-arch tarball.
+func ociVersionsFor(project string) ([]Ver, error) {
+	c, err := ociClientForDist()
+	if err != nil {
+		return nil, err
+	}
+	tags, err := c.ListTags(project)
+	if err != nil {
+		return nil, err
+	}
+	var vs []Ver
+	for _, t := range tags {
+		vs = append(vs, ParseVer(t))
 	}
 	sort.Slice(vs, func(i, j int) bool { return cmpVer(vs[i], vs[j]) < 0 })
 	return vs, nil
@@ -217,6 +266,13 @@ func (v Ver) Satisfies(constraint string) bool { return v.satisfies(constraint) 
 // and the extension that succeeded (".tar.gz" or ".tar.xz") — for mirror tooling
 // that copies bottles verbatim without extracting them.
 func DownloadBottle(project, ver, osn, arch string) ([]byte, string, error) {
+	if IsOCI(DistBase) {
+		c, err := ociClientForDist()
+		if err != nil {
+			return nil, "", err
+		}
+		return c.Pull(project, ver, osn, arch)
+	}
 	base := fmt.Sprintf("%s/%s/%s/%s/v%s", DistBase, project, osn, arch, ver)
 	for _, ext := range []string{".tar.gz", ".tar.xz"} {
 		resp, err := HTTPClient.Get(base + ext)
@@ -407,7 +463,20 @@ func Install(r Resolved, pkgxDir string) (bool, error) {
 }
 
 // fetchBottle returns the compressed bottle stream, trying .tar.gz then .tar.xz.
+// When DistBase selects the OCI transport it pulls the bottle blob and wraps the
+// bytes in a reader, so Install (and thus pkgm/pkgx) works over OCI unchanged.
 func fetchBottle(r Resolved, osn, arch string) (io.ReadCloser, bool, error) {
+	if IsOCI(DistBase) {
+		c, err := ociClientForDist()
+		if err != nil {
+			return nil, false, err
+		}
+		data, ext, err := c.Pull(r.Project, r.Version.Raw, osn, arch)
+		if err != nil {
+			return nil, false, err
+		}
+		return io.NopCloser(bytes.NewReader(data)), ext == ".tar.xz", nil
+	}
 	base := fmt.Sprintf("%s/%s/%s/%s/v%s", DistBase, r.Project, osn, arch, r.Version.Raw)
 	for _, ext := range []struct {
 		suffix string
