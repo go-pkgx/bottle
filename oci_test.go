@@ -461,7 +461,8 @@ func TestOCIPushReferrers(t *testing.T) {
 	manDesc, err := c.PushWithReferrers("ref.test", "1.0.0", "linux", "x86-64", tarball, ".tar.gz",
 		[]Referrer{
 			{ArtifactType: "application/vnd.cyclonedx+json", MediaType: "application/vnd.cyclonedx+json", Blob: sbom},
-			{ArtifactType: "application/vnd.in-toto+json", MediaType: "application/vnd.in-toto+json", Blob: prov},
+			{ArtifactType: "application/vnd.in-toto+json", MediaType: "application/vnd.in-toto+json", Blob: prov,
+				Annotations: map[string]string{"dev.cosignproject.cosign/signature": "sig123"}},
 		})
 	if err != nil {
 		t.Fatalf("PushWithReferrers: %v", err)

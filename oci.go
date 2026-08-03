@@ -313,6 +313,9 @@ type Referrer struct {
 	ArtifactType string
 	MediaType    string
 	Blob         []byte
+	// Annotations are merged into the referrer manifest — used to carry a cosign
+	// signature (dev.cosignproject.cosign/signature) alongside its payload blob.
+	Annotations map[string]string
 }
 
 // Push publishes one bottle for a project/version/os/arch: it pushes the tarball
@@ -387,11 +390,15 @@ func (c *OCIClient) pushReferrer(ctx context.Context, repo *remote.Repository, s
 		return err
 	}
 	subj := subject
+	ann := map[string]string{ocispec.AnnotationCreated: "1970-01-01T00:00:00Z"}
+	for k, v := range rf.Annotations {
+		ann[k] = v
+	}
 	_, err := oras.PackManifest(ctx, repo, oras.PackManifestVersion1_1, rf.ArtifactType,
 		oras.PackManifestOptions{
 			Subject:             &subj,
 			Layers:              []ocispec.Descriptor{blobDesc},
-			ManifestAnnotations: map[string]string{ocispec.AnnotationCreated: "1970-01-01T00:00:00Z"},
+			ManifestAnnotations: ann,
 		})
 	return err
 }
