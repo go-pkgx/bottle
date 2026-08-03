@@ -191,6 +191,11 @@ func (c *OCIClient) repository(project string) (*remote.Repository, error) {
 	}
 	repo.PlainHTTP = c.plainHTTP
 	repo.Client = c.client
+	// Registries that lack the referrers API (e.g. ghcr.io) make ORAS maintain a
+	// referrers *tag* instead; its default GC then DELETEs the superseded index,
+	// which ghcr rejects (405, no manifest deletion). Skip that GC — a small
+	// dangling index manifest is harmless and keeps multi-referrer pushes working.
+	repo.SkipReferrersGC = true
 	return repo, nil
 }
 
