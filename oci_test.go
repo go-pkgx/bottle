@@ -35,6 +35,9 @@ type fakeRegistry struct {
 	mtypes    map[string]string // "repo|ref"    -> media type
 	tags      map[string]map[string]bool
 	issued    int // token endpoint hits (auth-flow assertion)
+
+	// hook, if set, can force a status code for a request (fault injection).
+	hook func(r *http.Request) (status int, fail bool)
 }
 
 func newFakeRegistry(t *testing.T, requireTok bool) *fakeRegistry {
@@ -95,6 +98,12 @@ func (fr *fakeRegistry) handle(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
+	if fr.hook != nil {
+		if status, fail := fr.hook(r); fail {
+			http.Error(w, "forced fault", status)
+			return
+		}
+	}
 	if fr.requireTok && r.Header.Get("Authorization") != "Bearer test-token" {
 		w.Header().Set("WWW-Authenticate",
 			fmt.Sprintf(`Bearer realm="%s/token",service="fake",scope="repository:x:pull,push"`, fr.tokenSrv.URL))
@@ -117,7 +126,37 @@ func (fr *fakeRegistry) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"name": repo, "tags": tags})
 	case "referrers":
-		http.NotFound(w, r) // no referrers API → ORAS falls back, no-op
+		// Serve the OCI referrers API: an image index of every stored manifest
+		// whose subject digest is ref (as ghcr does).
+		var manifests []ocispec.Descriptor
+		seen := map[string]bool{}
+		for key, body := range fr.manifests {
+			i := strings.IndexByte(key, '|')
+			if i < 0 || key[:i] != repo {
+				continue
+			}
+			id := key[i+1:]
+			if !strings.HasPrefix(id, "sha256:") || seen[id] {
+				continue
+			}
+			var m ocispec.Manifest
+			if json.Unmarshal(body, &m) != nil || m.Subject == nil || m.Subject.Digest.String() != ref {
+				continue
+			}
+			seen[id] = true
+			manifests = append(manifests, ocispec.Descriptor{
+				MediaType:    fr.mtypes[key],
+				ArtifactType: m.ArtifactType,
+				Digest:       digest.Digest(id),
+				Size:         int64(len(body)),
+			})
+		}
+		w.Header().Set("Content-Type", ocispec.MediaTypeImageIndex)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"schemaVersion": 2,
+			"mediaType":     ocispec.MediaTypeImageIndex,
+			"manifests":     manifests,
+		})
 	case "manifests":
 		key := repo + "|" + ref
 		switch r.Method {
@@ -146,8 +185,18 @@ func (fr *fakeRegistry) handle(w http.ResponseWriter, r *http.Request) {
 				}
 				fr.tags[repo][ref] = true
 			}
+			// Advertise referrers-API support: echo OCI-Subject when the pushed
+			// manifest carries a subject, so ORAS skips fallback-tag maintenance
+			// (matches a spec-compliant registry such as ghcr).
+			var m ocispec.Manifest
+			if json.Unmarshal(body, &m) == nil && m.Subject != nil {
+				w.Header().Set("OCI-Subject", m.Subject.Digest.String())
+			}
 			w.Header().Set("Docker-Content-Digest", dg)
 			w.WriteHeader(http.StatusCreated)
+		case "DELETE":
+			delete(fr.manifests, key)
+			w.WriteHeader(http.StatusAccepted)
 		}
 	case "blobs":
 		key := repo + "|" + ref
@@ -396,6 +445,93 @@ func TestIsIndexMediaSniff(t *testing.T) {
 	// docker manifest list
 	if !isIndexMedia("application/vnd.docker.distribution.manifest.list.v2+json", nil) {
 		t.Error("docker manifest list not detected")
+	}
+}
+
+func TestOCIPushReferrers(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	defer fr.close()
+	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tarball := makeGzTarball("bottle-body")
+	sbom := []byte(`{"bomFormat":"CycloneDX","specVersion":"1.5"}`)
+	prov := []byte(`{"_type":"https://in-toto.io/Statement/v1"}`)
+	manDesc, err := c.PushWithReferrers("ref.test", "1.0.0", "linux", "x86-64", tarball, ".tar.gz",
+		[]Referrer{
+			{ArtifactType: "application/vnd.cyclonedx+json", MediaType: "application/vnd.cyclonedx+json", Blob: sbom},
+			{ArtifactType: "application/vnd.in-toto+json", MediaType: "application/vnd.in-toto+json", Blob: prov},
+		})
+	if err != nil {
+		t.Fatalf("PushWithReferrers: %v", err)
+	}
+	refs, err := c.Referrers("ref.test", manDesc)
+	if err != nil {
+		t.Fatalf("Referrers: %v", err)
+	}
+	if len(refs) != 2 {
+		t.Fatalf("referrers = %d, want 2", len(refs))
+	}
+	got := map[string]bool{}
+	for _, r := range refs {
+		got[r.ArtifactType] = true
+	}
+	if !got["application/vnd.cyclonedx+json"] || !got["application/vnd.in-toto+json"] {
+		t.Errorf("referrer artifact types = %v", got)
+	}
+	// the bottle itself is still pullable
+	if _, _, err := c.Pull("ref.test", "1.0.0", "linux", "x86-64"); err != nil {
+		t.Errorf("bottle not pullable after referrers: %v", err)
+	}
+}
+
+func TestOCIReferrerBlobFailure(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	defer fr.close()
+	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	sbom := []byte(`{"bomFormat":"CycloneDX"}`)
+	sbomDigest := sha256hex(sbom)
+	// fail exactly the referrer blob upload → pushReferrer blob error → push error
+	fr.hook = func(r *http.Request) (int, bool) {
+		return http.StatusInternalServerError, r.Method == "PUT" && r.URL.Query().Get("digest") == sbomDigest
+	}
+	if _, err := c.PushWithReferrers("blob.fail", "1", "linux", "x86-64", makeGzTarball("x"), ".tar.gz",
+		[]Referrer{{ArtifactType: "application/vnd.cyclonedx+json", MediaType: "application/vnd.cyclonedx+json", Blob: sbom}}); err == nil {
+		t.Error("expected referrer blob push failure")
+	}
+}
+
+func TestOCIReferrersServerError(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	defer fr.close()
+	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	manDesc, err := c.PushWithReferrers("srv.err", "1", "linux", "x86-64", makeGzTarball("y"), ".tar.gz", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fr.hook = func(r *http.Request) (int, bool) {
+		_, verb, _ := splitV2(r.URL.Path)
+		return http.StatusInternalServerError, verb == "referrers"
+	}
+	if _, err := c.Referrers("srv.err", manDesc); err == nil {
+		t.Error("expected referrers listing error")
+	}
+}
+
+func TestOCIReferrersErrors(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	defer fr.close()
+	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	// a bad project name makes repository() (remote.NewRepository) fail for both
+	// pushReferrer's caller and Referrers.
+	bad := "BAD..name/../x"
+	if _, err := c.PushWithReferrers(bad, "1", "linux", "x86-64", makeGzTarball("x"), ".tar.gz",
+		[]Referrer{{ArtifactType: "a", MediaType: "a", Blob: []byte("b")}}); err == nil {
+		t.Error("expected push error for bad project")
+	}
+	if _, err := c.Referrers(bad, ocispec.Descriptor{Digest: digest.Digest("sha256:" + strings.Repeat("a", 64))}); err == nil {
+		t.Error("expected referrers error for bad project")
 	}
 }
 

@@ -299,16 +299,41 @@ func isIndexMedia(mediaType string, body []byte) bool {
 
 // --- push -------------------------------------------------------------------
 
+// Referrer is an attestation to attach to a bottle's per-platform manifest as an
+// OCI referrer (subject-linked artifact): a CycloneDX/SPDX SBOM, an in-toto SLSA
+// provenance statement, or (later) a cosign signature. ArtifactType classifies
+// the referrer manifest; MediaType is the layer blob's media type (usually the
+// same); Blob is the attestation bytes.
+type Referrer struct {
+	ArtifactType string
+	MediaType    string
+	Blob         []byte
+}
+
 // Push publishes one bottle for a project/version/os/arch: it pushes the tarball
 // as a layer blob, packs a per-platform image manifest (ORAS PackManifest, which
 // also pushes a scratch config blob), then merges the platform into the
 // version-tag image index (fetching any existing index first) and tags it. ext
 // selects the layer mediaType (".tar.gz" or ".tar.xz").
 func (c *OCIClient) Push(project, ver, osn, arch string, tarball []byte, ext string) error {
+	_, err := c.push(project, ver, osn, arch, tarball, ext, nil)
+	return err
+}
+
+// PushWithReferrers is Push plus a set of attestations attached to the pushed
+// per-platform manifest as OCI referrers. It returns that manifest's descriptor
+// so callers can list/verify the referrers. Referrers are pushed before the
+// version index is tagged, so a reader that resolves the index always finds a
+// manifest whose attestations are already present.
+func (c *OCIClient) PushWithReferrers(project, ver, osn, arch string, tarball []byte, ext string, refs []Referrer) (ocispec.Descriptor, error) {
+	return c.push(project, ver, osn, arch, tarball, ext, refs)
+}
+
+func (c *OCIClient) push(project, ver, osn, arch string, tarball []byte, ext string, refs []Referrer) (ocispec.Descriptor, error) {
 	ctx := context.Background()
 	repo, err := c.repository(project)
 	if err != nil {
-		return err
+		return ocispec.Descriptor{}, err
 	}
 	layerMedia := MediaBottleLayerGz
 	if ext == ".tar.xz" {
@@ -316,7 +341,7 @@ func (c *OCIClient) Push(project, ver, osn, arch string, tarball []byte, ext str
 	}
 	layerDesc := orascontent.NewDescriptorFromBytes(layerMedia, tarball)
 	if err := pushIfAbsent(ctx, repo, layerDesc, tarball); err != nil {
-		return fmt.Errorf("push layer: %w", err)
+		return ocispec.Descriptor{}, fmt.Errorf("push layer: %w", err)
 	}
 	// Pack + push a per-platform image manifest (config blob is created by ORAS).
 	manDesc, err := oras.PackManifest(ctx, repo, oras.PackManifestVersion1_1, ArtifactTypeBottle,
@@ -326,20 +351,62 @@ func (c *OCIClient) Push(project, ver, osn, arch string, tarball []byte, ext str
 			ManifestAnnotations: map[string]string{ocispec.AnnotationCreated: "1970-01-01T00:00:00Z"},
 		})
 	if err != nil {
-		return fmt.Errorf("pack manifest: %w", err)
+		return ocispec.Descriptor{}, fmt.Errorf("pack manifest: %w", err)
 	}
 	manDesc.Platform = &ocispec.Platform{OS: osn, Architecture: ociArch(arch)}
+	// Attach attestations as referrers of the platform manifest.
+	for _, rf := range refs {
+		if err := c.pushReferrer(ctx, repo, manDesc, rf); err != nil {
+			return manDesc, fmt.Errorf("push referrer %s: %w", rf.ArtifactType, err)
+		}
+	}
 	// Merge the platform into the version-tag index and re-tag.
 	idx := c.fetchOrNewIndex(ctx, repo, ver)
 	idx.Manifests = upsertPlatform(idx.Manifests, manDesc)
 	idxBytes, err := json.Marshal(idx)
 	if err != nil {
-		return err
+		return manDesc, err
 	}
 	if _, err := oras.TagBytes(ctx, repo, ocispec.MediaTypeImageIndex, idxBytes, ver); err != nil {
-		return fmt.Errorf("tag index: %w", err)
+		return manDesc, fmt.Errorf("tag index: %w", err)
 	}
-	return nil
+	return manDesc, nil
+}
+
+// pushReferrer pushes one attestation blob and an artifact manifest that links
+// it to subject via the OCI subject field (a referrer). On registries with the
+// referrers API (ghcr) it is discoverable via Referrers.
+func (c *OCIClient) pushReferrer(ctx context.Context, repo *remote.Repository, subject ocispec.Descriptor, rf Referrer) error {
+	blobDesc := orascontent.NewDescriptorFromBytes(rf.MediaType, rf.Blob)
+	if err := pushIfAbsent(ctx, repo, blobDesc, rf.Blob); err != nil {
+		return err
+	}
+	subj := subject
+	_, err := oras.PackManifest(ctx, repo, oras.PackManifestVersion1_1, rf.ArtifactType,
+		oras.PackManifestOptions{
+			Subject:             &subj,
+			Layers:              []ocispec.Descriptor{blobDesc},
+			ManifestAnnotations: map[string]string{ocispec.AnnotationCreated: "1970-01-01T00:00:00Z"},
+		})
+	return err
+}
+
+// Referrers lists the attestations attached to a manifest (its OCI referrers),
+// each descriptor carrying the referrer's ArtifactType.
+func (c *OCIClient) Referrers(project string, subject ocispec.Descriptor) ([]ocispec.Descriptor, error) {
+	repo, err := c.repository(project)
+	if err != nil {
+		return nil, err
+	}
+	var out []ocispec.Descriptor
+	err = repo.Referrers(context.Background(), subject, "", func(page []ocispec.Descriptor) error {
+		out = append(out, page...)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // pushIfAbsent pushes content only when the registry does not already hold it,
