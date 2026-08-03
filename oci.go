@@ -25,6 +25,7 @@ package bottle
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -230,42 +231,8 @@ func (c *OCIClient) Pull(project, ver, osn, arch string) ([]byte, string, error)
 	if err != nil {
 		return nil, "", err
 	}
-	tagDesc, rc, err := repo.FetchReference(ctx, ver)
+	_, man, err := c.resolvePlatform(ctx, repo, project, ver, osn, arch)
 	if err != nil {
-		return nil, "", fmt.Errorf("resolve %s v%s: %w", project, ver, err)
-	}
-	body, err := orascontent.ReadAll(rc, tagDesc)
-	rc.Close()
-	if err != nil {
-		return nil, "", err
-	}
-	// The tag resolves to an index (multi-platform) or directly to an image
-	// manifest (single-platform push).
-	manBytes := body
-	if isIndexMedia(tagDesc.MediaType, body) {
-		var idx ocispec.Index
-		if err := json.Unmarshal(body, &idx); err != nil {
-			return nil, "", err
-		}
-		wantArch := ociArch(arch)
-		var pick *ocispec.Descriptor
-		for i := range idx.Manifests {
-			m := idx.Manifests[i]
-			if m.Platform != nil && m.Platform.OS == osn && m.Platform.Architecture == wantArch {
-				pick = &m
-				break
-			}
-		}
-		if pick == nil {
-			return nil, "", fmt.Errorf("no bottle for %s v%s (%s/%s): platform not in index", project, ver, osn, arch)
-		}
-		manBytes, err = orascontent.FetchAll(ctx, repo, *pick)
-		if err != nil {
-			return nil, "", err
-		}
-	}
-	var man ocispec.Manifest
-	if err := json.Unmarshal(manBytes, &man); err != nil {
 		return nil, "", err
 	}
 	for _, l := range man.Layers {
@@ -280,6 +247,98 @@ func (c *OCIClient) Pull(project, ver, osn, arch string) ([]byte, string, error)
 		return data, ext, nil
 	}
 	return nil, "", fmt.Errorf("no bottle layer for %s v%s (%s/%s)", project, ver, osn, arch)
+}
+
+// resolvePlatform resolves a version tag to the per-platform image manifest for
+// os/arch: the tag is either a multi-platform index (pick the matching entry) or
+// a single image manifest. It returns that manifest's descriptor (for referrer
+// lookup) and its parsed body.
+func (c *OCIClient) resolvePlatform(ctx context.Context, repo *remote.Repository, project, ver, osn, arch string) (ocispec.Descriptor, ocispec.Manifest, error) {
+	tagDesc, rc, err := repo.FetchReference(ctx, ver)
+	if err != nil {
+		return ocispec.Descriptor{}, ocispec.Manifest{}, fmt.Errorf("resolve %s v%s: %w", project, ver, err)
+	}
+	body, err := orascontent.ReadAll(rc, tagDesc)
+	rc.Close()
+	if err != nil {
+		return ocispec.Descriptor{}, ocispec.Manifest{}, err
+	}
+	manDesc, manBytes := tagDesc, body
+	if isIndexMedia(tagDesc.MediaType, body) {
+		var idx ocispec.Index
+		if err := json.Unmarshal(body, &idx); err != nil {
+			return ocispec.Descriptor{}, ocispec.Manifest{}, err
+		}
+		wantArch := ociArch(arch)
+		var pick *ocispec.Descriptor
+		for i := range idx.Manifests {
+			m := idx.Manifests[i]
+			if m.Platform != nil && m.Platform.OS == osn && m.Platform.Architecture == wantArch {
+				pick = &m
+				break
+			}
+		}
+		if pick == nil {
+			return ocispec.Descriptor{}, ocispec.Manifest{}, fmt.Errorf("no bottle for %s v%s (%s/%s): platform not in index", project, ver, osn, arch)
+		}
+		manDesc = *pick
+		manBytes, err = orascontent.FetchAll(ctx, repo, *pick)
+		if err != nil {
+			return ocispec.Descriptor{}, ocispec.Manifest{}, err
+		}
+	}
+	var man ocispec.Manifest
+	if err := json.Unmarshal(manBytes, &man); err != nil {
+		return ocispec.Descriptor{}, ocispec.Manifest{}, err
+	}
+	return manDesc, man, nil
+}
+
+// VerifyBottle checks the cosign-style signature attached to a pulled bottle as
+// an OCI referrer, against the pinned SigningPublicKey. It is fail-closed: a
+// missing signature referrer, a malformed one, or a signature that does not
+// verify (or does not commit to this tarball) all return an error.
+func (c *OCIClient) VerifyBottle(project, ver, osn, arch string, tarball []byte) error {
+	ctx := context.Background()
+	repo, err := c.repository(project)
+	if err != nil {
+		return err
+	}
+	desc, _, err := c.resolvePlatform(ctx, repo, project, ver, osn, arch)
+	if err != nil {
+		return err
+	}
+	refs, err := c.Referrers(project, desc)
+	if err != nil {
+		return err
+	}
+	var sig *ocispec.Descriptor
+	for i := range refs {
+		if refs[i].ArtifactType == ArtifactTypeSignature {
+			sig = &refs[i]
+			break
+		}
+	}
+	if sig == nil {
+		return fmt.Errorf("bottle: %s v%s (%s/%s) is unsigned (no signature referrer)", project, ver, osn, arch)
+	}
+	manBytes, err := orascontent.FetchAll(ctx, repo, *sig)
+	if err != nil {
+		return err
+	}
+	var man ocispec.Manifest
+	if err := json.Unmarshal(manBytes, &man); err != nil {
+		return err
+	}
+	b64 := man.Annotations[CosignSignatureAnnotation]
+	if b64 == "" || len(man.Layers) == 0 {
+		return errors.New("bottle: malformed signature referrer")
+	}
+	payload, err := orascontent.FetchAll(ctx, repo, man.Layers[0])
+	if err != nil {
+		return err
+	}
+	return VerifySignature(tarball, payload, b64, "")
 }
 
 // isIndexMedia reports whether a manifest is an image index, by descriptor

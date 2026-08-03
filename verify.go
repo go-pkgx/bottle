@@ -6,14 +6,30 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/go-attest/sign"
 )
 
+// osGetenv is os.Getenv, swappable in tests.
+var osGetenv = os.Getenv
+
+// VerifyRequired reports whether PKGX_VERIFY demands fail-closed signature
+// verification when installing (any of 1/true/yes/on).
+func VerifyRequired() bool {
+	switch strings.ToLower(strings.TrimSpace(osGetenv("PKGX_VERIFY"))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
 // SigningPublicKey is the go-pkgx bottle signing key (minisign format). A signed
 // bottle carries a cosign-style signature referrer whose signature verifies
-// against this key; verification is fail-closed.
-const SigningPublicKey = "RWQ+rmH+fXy2iYr+gReQAOQtYWtH0A7UlxcAa2hpr+txNBwGqtpFsR6L"
+// against this key; verification is fail-closed. It is a var (not const) only so
+// tests can substitute a throwaway key.
+var SigningPublicKey = "RWQ+rmH+fXy2iYr+gReQAOQtYWtH0A7UlxcAa2hpr+txNBwGqtpFsR6L"
 
 // Signature referrer conventions.
 const (

@@ -271,7 +271,21 @@ func DownloadBottle(project, ver, osn, arch string) ([]byte, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-		return c.Pull(project, ver, osn, arch)
+		data, ext, err := c.Pull(project, ver, osn, arch)
+		if err != nil {
+			return nil, "", err
+		}
+		if VerifyRequired() {
+			if err := c.VerifyBottle(project, ver, osn, arch, data); err != nil {
+				return nil, "", fmt.Errorf("verify %s v%s (%s/%s): %w", project, ver, osn, arch, err)
+			}
+		}
+		return data, ext, nil
+	}
+	// The static-HTTP transport carries no signatures (referrers are OCI-only);
+	// if verification is demanded we cannot satisfy it, so fail closed.
+	if VerifyRequired() {
+		return nil, "", fmt.Errorf("PKGX_VERIFY is set but PKGX_DIST=%s has no signatures; use an oci:// dist", DistBase)
 	}
 	base := fmt.Sprintf("%s/%s/%s/%s/v%s", DistBase, project, osn, arch, ver)
 	for _, ext := range []string{".tar.gz", ".tar.xz"} {
