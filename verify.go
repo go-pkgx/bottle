@@ -15,14 +15,16 @@ import (
 // osGetenv is os.Getenv, swappable in tests.
 var osGetenv = os.Getenv
 
-// VerifyRequired reports whether PKGX_VERIFY demands fail-closed signature
-// verification when installing (any of 1/true/yes/on).
+// VerifyRequired reports whether fail-closed signature verification is demanded
+// when installing. It is **on by default** (secure by default): only an explicit
+// PKGX_VERIFY=0/false/no/off opts out. Anything else — unset, 1/true/yes/on, or
+// an unrecognised value — keeps verification on.
 func VerifyRequired() bool {
 	switch strings.ToLower(strings.TrimSpace(osGetenv("PKGX_VERIFY"))) {
-	case "1", "true", "yes", "on":
-		return true
+	case "0", "false", "no", "off":
+		return false
 	}
-	return false
+	return true
 }
 
 // SigningPublicKey is the go-pkgx bottle signing key (minisign format). A signed

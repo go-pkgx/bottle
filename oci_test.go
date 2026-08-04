@@ -248,6 +248,7 @@ func resetOCICache() {
 }
 
 func TestOCIRoundTripPushPull(t *testing.T) {
+	t.Setenv("PKGX_VERIFY", "0") // transport round-trip on unsigned bottles
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
 	base := fr.base("go-pkgx/bottles")
@@ -296,6 +297,7 @@ func TestOCIRoundTripPushPull(t *testing.T) {
 }
 
 func TestOCIAuthChallengeFlow(t *testing.T) {
+	t.Setenv("PKGX_VERIFY", "0")   // transport/auth test on unsigned bottles
 	fr := newFakeRegistry(t, true) // require bearer token
 	defer fr.close()
 	base := fr.base("go-pkgx/bottles")

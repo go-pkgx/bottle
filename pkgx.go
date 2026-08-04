@@ -20,8 +20,13 @@ import (
 // Base URLs for the pkgx distribution + pantry; overridable in tests, and at
 // runtime via $PKGX_DIST / $PKGX_PANTRY so a consumer can point pkgm/pkgx at a
 // local mirror produced by the `mirror` tool.
+//
+// DistBase defaults to the **signed** go-pkgx OCI registry so the default install
+// path is verifiable end-to-end (pairs with VerifyRequired defaulting on). That
+// registry is a growing subset of the pantry; for the full upstream catalogue set
+// PKGX_DIST=https://dist.pkgx.dev (unsigned → also set PKGX_VERIFY=0).
 var (
-	DistBase   = "https://dist.pkgx.dev"
+	DistBase   = "oci://ghcr.io/go-pkgx/packages"
 	PantryBase = "https://raw.githubusercontent.com/pkgxdev/pantry/main/projects"
 )
 
@@ -285,7 +290,7 @@ func DownloadBottle(project, ver, osn, arch string) ([]byte, string, error) {
 	// The static-HTTP transport carries no signatures (referrers are OCI-only);
 	// if verification is demanded we cannot satisfy it, so fail closed.
 	if VerifyRequired() {
-		return nil, "", fmt.Errorf("PKGX_VERIFY is set but PKGX_DIST=%s has no signatures; use an oci:// dist", DistBase)
+		return nil, "", fmt.Errorf("signature verification is on by default but PKGX_DIST=%s (HTTP) has no signatures; use an oci:// dist or set PKGX_VERIFY=0", DistBase)
 	}
 	base := fmt.Sprintf("%s/%s/%s/%s/v%s", DistBase, project, osn, arch, ver)
 	for _, ext := range []string{".tar.gz", ".tar.xz"} {

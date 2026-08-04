@@ -33,13 +33,15 @@ func pushSignedBottle(t *testing.T, c *OCIClient, project string, kp *sign.Keypa
 }
 
 func TestVerifyRequired(t *testing.T) {
-	for _, v := range []string{"1", "true", "TRUE", "yes", "on"} {
+	// On by default: unset, the truthy words, and any unrecognised value all verify.
+	for _, v := range []string{"", "1", "true", "TRUE", "yes", "on", "maybe"} {
 		t.Setenv("PKGX_VERIFY", v)
 		if !VerifyRequired() {
 			t.Errorf("PKGX_VERIFY=%q should require verify", v)
 		}
 	}
-	for _, v := range []string{"", "0", "off", "no", "maybe"} {
+	// Only an explicit opt-out disables it.
+	for _, v := range []string{"0", "false", "FALSE", "off", "no"} {
 		t.Setenv("PKGX_VERIFY", v)
 		if VerifyRequired() {
 			t.Errorf("PKGX_VERIFY=%q should not require verify", v)
@@ -131,8 +133,9 @@ func TestDownloadBottleVerify(t *testing.T) {
 	if _, _, err := DownloadBottle("dl.unsigned", "1.0.0", "linux", "x86-64"); err == nil {
 		t.Error("unsigned bottle passed under PKGX_VERIFY")
 	}
-	// without PKGX_VERIFY, an unsigned bottle downloads fine
-	t.Setenv("PKGX_VERIFY", "")
+	// with verification explicitly opted out (PKGX_VERIFY=0), an unsigned bottle
+	// downloads fine (verify is on by default, so this needs the opt-out).
+	t.Setenv("PKGX_VERIFY", "0")
 	if _, _, err := DownloadBottle("dl.unsigned", "1.0.0", "linux", "x86-64"); err != nil {
 		t.Errorf("unverified download: %v", err)
 	}

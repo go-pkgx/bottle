@@ -3,6 +3,7 @@ package bottle
 import "testing"
 
 func TestVersionsForAndDownloadBottle(t *testing.T) {
+	t.Setenv("PKGX_VERIFY", "0") // transport test: HTTP dist carries no signatures
 	osn, arch := HostSlug()
 	defer fakeServer(t, map[string]fakePkg{
 		"acme.org/tool": {
