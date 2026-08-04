@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	specs "github.com/opencontainers/image-spec/specs-go"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -427,17 +428,67 @@ func (c *OCIClient) push(project, ver, osn, arch string, tarball []byte, ext str
 			return manDesc, fmt.Errorf("push referrer %s: %w", rf.ArtifactType, err)
 		}
 	}
-	// Merge the platform into the version-tag index and re-tag.
-	idx := c.fetchOrNewIndex(ctx, repo, ver)
-	idx.Manifests = upsertPlatform(idx.Manifests, manDesc)
-	idxBytes, err := json.Marshal(idx)
-	if err != nil {
+	// Merge this platform into the version-tag image index. The index is a
+	// read-modify-write with no registry-side lock, so two publishers racing on
+	// the SAME (project, version) — e.g. the two arch matrix jobs both hitting a
+	// shared dependency's first publish — could clobber each other (last write
+	// wins, silently dropping a platform). mergePlatformIntoIndex reconciles.
+	if err := c.mergePlatformIntoIndex(ctx, repo, ver, manDesc); err != nil {
 		return manDesc, err
 	}
-	if _, err := oras.TagBytes(ctx, repo, ocispec.MediaTypeImageIndex, idxBytes, ver); err != nil {
-		return manDesc, fmt.Errorf("tag index: %w", err)
-	}
 	return manDesc, nil
+}
+
+// Reconcile seams (vars so tests can shrink them): indexRetryAttempts bounds the
+// loop, indexRetryBackoff paces retries, afterTagHook fires right after a tag
+// write so a test can simulate a concurrent clobber.
+var (
+	indexRetryAttempts = 6
+	indexRetryBackoff  = func(attempt int) { time.Sleep(time.Duration(attempt) * 20 * time.Millisecond) }
+	afterTagHook       func()
+)
+
+// mergePlatformIntoIndex upserts manDesc's platform into the version-tag image
+// index and re-tags, reconciling against concurrent writers: after each tag it
+// re-reads the index and, if a racing publisher clobbered the tag and dropped
+// our platform, re-merges from the now-current index (which preserves the
+// racer's platform) and retries until ours survives. Converges because every
+// retry starts from the latest tagged state, so writers only ever ADD platforms.
+func (c *OCIClient) mergePlatformIntoIndex(ctx context.Context, repo *remote.Repository, ver string, manDesc ocispec.Descriptor) error {
+	for attempt := 0; attempt < indexRetryAttempts; attempt++ {
+		idx := c.fetchOrNewIndex(ctx, repo, ver)
+		idx.Manifests = upsertPlatform(idx.Manifests, manDesc)
+		idxBytes, err := marshalIndex(idx)
+		if err != nil {
+			return err
+		}
+		if _, err := oras.TagBytes(ctx, repo, ocispec.MediaTypeImageIndex, idxBytes, ver); err != nil {
+			return fmt.Errorf("tag index: %w", err)
+		}
+		if afterTagHook != nil {
+			afterTagHook()
+		}
+		// Verify our platform survived a possible concurrent clobber.
+		if indexHasManifest(c.fetchOrNewIndex(ctx, repo, ver), manDesc) {
+			return nil
+		}
+		indexRetryBackoff(attempt + 1)
+	}
+	return fmt.Errorf("index for %s: platform %s/%s did not survive %d reconcile attempts (concurrent writers)",
+		ver, manDesc.Platform.OS, manDesc.Platform.Architecture, indexRetryAttempts)
+}
+
+// marshalIndex is a seam so the (near-impossible) marshal-error branch is testable.
+var marshalIndex = func(idx ocispec.Index) ([]byte, error) { return json.Marshal(idx) }
+
+// indexHasManifest reports whether idx already lists a manifest with desc's digest.
+func indexHasManifest(idx ocispec.Index, desc ocispec.Descriptor) bool {
+	for _, m := range idx.Manifests {
+		if m.Digest == desc.Digest {
+			return true
+		}
+	}
+	return false
 }
 
 // pushReferrer pushes one attestation blob and an artifact manifest that links

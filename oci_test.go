@@ -3,6 +3,7 @@ package bottle
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -15,7 +16,9 @@ import (
 	"testing"
 
 	digest "github.com/opencontainers/go-digest"
+	specs "github.com/opencontainers/image-spec/specs-go"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	oras "oras.land/oras-go/v2"
 )
 
 // fakeRegistry is an in-memory OCI distribution (registry v2) endpoint used to
@@ -500,6 +503,106 @@ func TestOCIReferrerBlobFailure(t *testing.T) {
 	if _, err := c.PushWithReferrers("blob.fail", "1", "linux", "x86-64", makeGzTarball("x"), ".tar.gz",
 		[]Referrer{{ArtifactType: "application/vnd.cyclonedx+json", MediaType: "application/vnd.cyclonedx+json", Blob: sbom}}); err == nil {
 		t.Error("expected referrer blob push failure")
+	}
+}
+
+// clobberIndexTo re-tags ver with an index missing our platform, simulating a
+// racing publisher that read a stale index and overwrote the tag.
+func clobberIndexTo(t *testing.T, c *OCIClient, project, ver string) {
+	t.Helper()
+	repo, err := c.repository(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	empty := ocispec.Index{Versioned: specs.Versioned{SchemaVersion: 2}, MediaType: ocispec.MediaTypeImageIndex}
+	b, _ := json.Marshal(empty)
+	if _, err := oras.TagBytes(context.Background(), repo, ocispec.MediaTypeImageIndex, b, ver); err != nil {
+		t.Fatalf("clobber tag: %v", err)
+	}
+}
+
+// TestOCIIndexReconcilesConcurrentClobber: a racer overwrites the tag right after
+// our first write, dropping our platform; the reconcile loop must re-merge and
+// leave our platform present.
+func TestOCIIndexReconcilesConcurrentClobber(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	defer fr.close()
+	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+
+	oldB, oldH := indexRetryBackoff, afterTagHook
+	indexRetryBackoff = func(int) {}
+	defer func() { indexRetryBackoff, afterTagHook = oldB, oldH }()
+
+	clobbered := false
+	afterTagHook = func() {
+		if clobbered {
+			return
+		}
+		clobbered = true
+		clobberIndexTo(t, c, "race.test", "1.0.0")
+	}
+	if _, err := c.PushWithReferrers("race.test", "1.0.0", "linux", "x86-64", makeGzTarball("x"), ".tar.gz", nil); err != nil {
+		t.Fatalf("reconcile push: %v", err)
+	}
+	if !clobbered {
+		t.Fatal("clobber hook never fired")
+	}
+	repo, _ := c.repository("race.test")
+	idx := c.fetchOrNewIndex(context.Background(), repo, "1.0.0")
+	found := false
+	for _, m := range idx.Manifests {
+		if m.Platform != nil && m.Platform.OS == "linux" && m.Platform.Architecture == "amd64" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("platform absent after reconcile: %+v", idx.Manifests)
+	}
+}
+
+// TestOCIIndexReconcileGivesUp: a racer clobbers on every attempt → the loop
+// exhausts its budget and returns an error rather than silently losing the platform.
+func TestOCIIndexReconcileGivesUp(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	defer fr.close()
+	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+
+	oldA, oldB, oldH := indexRetryAttempts, indexRetryBackoff, afterTagHook
+	indexRetryAttempts, indexRetryBackoff = 2, func(int) {}
+	defer func() { indexRetryAttempts, indexRetryBackoff, afterTagHook = oldA, oldB, oldH }()
+
+	afterTagHook = func() { clobberIndexTo(t, c, "race2.test", "1.0.0") } // always clobber
+	if _, err := c.PushWithReferrers("race2.test", "1.0.0", "linux", "x86-64", makeGzTarball("y"), ".tar.gz", nil); err == nil {
+		t.Fatal("expected give-up error after repeated clobbers")
+	}
+}
+
+// TestOCIIndexTagFailure covers the tag-write error branch of the reconcile loop.
+func TestOCIIndexTagFailure(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	defer fr.close()
+	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	// Fail the PUT that tags the version index (manifests/<tag>); per-platform
+	// manifests and blobs are addressed by digest, so only the tag write fails.
+	fr.hook = func(r *http.Request) (int, bool) {
+		return http.StatusInternalServerError, r.Method == "PUT" && strings.HasSuffix(r.URL.Path, "manifests/1.0.0")
+	}
+	if _, err := c.PushWithReferrers("tagfail.test", "1.0.0", "linux", "x86-64", makeGzTarball("t"), ".tar.gz", nil); err == nil {
+		t.Fatal("expected tag-index write error")
+	}
+}
+
+// TestOCIIndexMarshalError covers the (defensive) index-marshal failure branch.
+func TestOCIIndexMarshalError(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	defer fr.close()
+	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+
+	old := marshalIndex
+	marshalIndex = func(ocispec.Index) ([]byte, error) { return nil, fmt.Errorf("boom") }
+	defer func() { marshalIndex = old }()
+	if _, err := c.PushWithReferrers("marshal.fail", "1", "linux", "x86-64", makeGzTarball("z"), ".tar.gz", nil); err == nil {
+		t.Fatal("expected index marshal error")
 	}
 }
 
