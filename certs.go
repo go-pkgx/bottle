@@ -18,10 +18,15 @@ var cacert []byte
 // back to the system pool if, somehow, the embed is empty). It is overridable.
 var HTTPClient = NewHTTPClient()
 
+// systemCertPool is x509.SystemCertPool, swappable in tests so the
+// no-system-trust-store fallback (an unusual platform, or a scratch image) is
+// exercisable on a host that does have one.
+var systemCertPool = x509.SystemCertPool
+
 // NewHTTPClient builds an *http.Client that trusts the embedded CA bundle in
 // addition to the host's system trust store.
 func NewHTTPClient() *http.Client {
-	pool, err := x509.SystemCertPool()
+	pool, err := systemCertPool()
 	if err != nil || pool == nil {
 		pool = x509.NewCertPool()
 	}

@@ -98,6 +98,7 @@ type fakePkg struct {
 	files      map[string]string            // path within prefix -> contents (regular files)
 	filesByVer map[string]map[string]string // per-version override of files (for soname-drift tests)
 	xzOnly     bool
+	noBottle   map[string]bool // versions listed in versions.txt but with no bottle (404)
 }
 
 func fakeServer(t *testing.T, pkgs map[string]fakePkg) func() {
@@ -136,6 +137,12 @@ func fakeServer(t *testing.T, pkgs map[string]fakePkg) func() {
 			rest := strings.TrimPrefix(p, pfx)
 			if pk.xzOnly && strings.HasSuffix(rest, ".tar.gz") {
 				http.NotFound(w, r) // force xz fallback
+				return
+			}
+			// A version present in versions.txt but with no published bottle 404s
+			// for both extensions (exercises the install-failure/continue paths).
+			if v := strings.TrimSuffix(strings.TrimSuffix(rest, ".tar.gz"), ".tar.xz"); pk.noBottle[v] {
+				http.NotFound(w, r)
 				return
 			}
 			if strings.HasSuffix(rest, ".tar.gz") {

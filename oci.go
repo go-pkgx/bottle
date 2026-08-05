@@ -326,11 +326,14 @@ func (c *OCIClient) VerifyBottle(project, ver, osn, arch string, tarball []byte)
 	if err != nil {
 		return err
 	}
+	// The signature referrer manifest is digest-verified content that the
+	// referrers listing already parsed, so a decode failure here would be a
+	// malformed referrer just like a missing annotation or layer — fold them.
 	var man ocispec.Manifest
-	if err := json.Unmarshal(manBytes, &man); err != nil {
-		return err
+	b64 := ""
+	if json.Unmarshal(manBytes, &man) == nil {
+		b64 = man.Annotations[CosignSignatureAnnotation]
 	}
-	b64 := man.Annotations[CosignSignatureAnnotation]
 	if b64 == "" || len(man.Layers) == 0 {
 		return errors.New("bottle: malformed signature referrer")
 	}

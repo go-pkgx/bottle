@@ -7,9 +7,12 @@ package bottle
 
 import "runtime"
 
-// goos returns the pkgx OS slug for the current build.
-func goos() string {
-	switch runtime.GOOS {
+// osSlug maps a Go GOOS value to the pkgx OS slug. Everything that is not
+// darwin/windows is treated as linux (pkgx only bottles those three families).
+// It is a pure function so every branch is unit-testable without needing to be
+// built for that OS.
+func osSlug(g string) string {
+	switch g {
 	case "darwin":
 		return "darwin"
 	case "windows":
@@ -19,17 +22,30 @@ func goos() string {
 	}
 }
 
-// goarch returns the pkgx architecture slug for the current build.
-func goarch() string {
-	switch runtime.GOARCH {
+// archSlug maps a Go GOARCH value to the pkgx architecture slug (the pass-through
+// default keeps arches pkgx spells the same as Go, e.g. riscv64). Pure, for the
+// same testability reason as osSlug.
+func archSlug(a string) string {
+	switch a {
 	case "arm64":
 		return "aarch64"
 	case "amd64":
 		return "x86-64"
 	default:
-		return runtime.GOARCH
+		return a
 	}
 }
+
+// goos / goarch return the pkgx OS / architecture slug for the running machine.
+// They are function vars (defaulting to the real runtime detection, always
+// routed through osSlug/archSlug so they can never disagree with it) so a test
+// can exercise the OS/arch-specific code paths — Windows binary resolution, the
+// linux scratch-rootfs and DT_NEEDED closure completion — that are otherwise
+// unreachable on the host running the suite.
+var (
+	goos   = func() string { return osSlug(runtime.GOOS) }
+	goarch = func() string { return archSlug(runtime.GOARCH) }
+)
 
 // GOOS returns the pkgx OS slug ("linux", "darwin", or "windows") for the
 // running machine.

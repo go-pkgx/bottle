@@ -39,8 +39,30 @@ type fakeRegistry struct {
 	tags      map[string]map[string]bool
 	issued    int // token endpoint hits (auth-flow assertion)
 
+	// corruptDigest["repo|ref"], when set, makes a manifest GET advertise a
+	// bogus Docker-Content-Digest so ORAS's content verification fails on read
+	// (exercises the ReadAll-mismatch branch).
+	corruptDigest map[string]bool
+
 	// hook, if set, can force a status code for a request (fault injection).
 	hook func(r *http.Request) (status int, fail bool)
+}
+
+// injectManifest stores a raw manifest body under a tag with a self-consistent
+// Docker-Content-Digest (computed from the body). Because the served digest
+// matches the served bytes, ORAS's read verification passes and the (possibly
+// malformed) bytes reach the JSON decoder — the way the index/manifest
+// unmarshal-error branches are reached.
+func (fr *fakeRegistry) injectManifest(repo, tag, mediaType string, body []byte) {
+	fr.mu.Lock()
+	defer fr.mu.Unlock()
+	key := repo + "|" + tag
+	fr.manifests[key] = body
+	fr.mtypes[key] = mediaType
+	if fr.tags[repo] == nil {
+		fr.tags[repo] = map[string]bool{}
+	}
+	fr.tags[repo][tag] = true
 }
 
 func newFakeRegistry(t *testing.T, requireTok bool) *fakeRegistry {
@@ -169,8 +191,12 @@ func (fr *fakeRegistry) handle(w http.ResponseWriter, r *http.Request) {
 				http.NotFound(w, r)
 				return
 			}
+			dg := sha256hex(body)
+			if fr.corruptDigest[key] {
+				dg = "sha256:" + strings.Repeat("0", 64) // wrong on purpose
+			}
 			w.Header().Set("Content-Type", fr.mtypes[key])
-			w.Header().Set("Docker-Content-Digest", sha256hex(body))
+			w.Header().Set("Docker-Content-Digest", dg)
 			w.Header().Set("Content-Length", fmt.Sprint(len(body)))
 			if r.Method == "GET" {
 				w.Write(body)
