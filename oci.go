@@ -27,7 +27,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -115,7 +114,7 @@ type OCIClient struct {
 // pre-issued bearer), else OCI_USERNAME / OCI_PASSWORD for token exchange /
 // basic auth. Public repositories work anonymously.
 func NewOCIClient(base string) (*OCIClient, error) {
-	return newOCIClientEnv(base, os.Getenv)
+	return newOCIClientEnv(base, Env)
 }
 
 func newOCIClientEnv(base string, getenv func(string) string) (*OCIClient, error) {

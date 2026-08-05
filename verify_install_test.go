@@ -2,6 +2,7 @@ package bottle
 
 import (
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -33,19 +34,43 @@ func pushSignedBottle(t *testing.T, c *OCIClient, project string, kp *sign.Keypa
 }
 
 func TestVerifyRequired(t *testing.T) {
-	// On by default: unset, the truthy words, and any unrecognised value all verify.
-	for _, v := range []string{"", "1", "true", "TRUE", "yes", "on", "maybe"} {
-		t.Setenv("PKGX_VERIFY", v)
+	// Empty config so only the injected env drives the decision.
+	setConfigPath(t, filepath.Join(t.TempDir(), "absent.hcl2"))
+	set := func(v string, present bool) {
+		lookupEnv = func(k string) (string, bool) {
+			if k == "PKGX_VERIFY" {
+				return v, present
+			}
+			return "", false
+		}
+	}
+	// On by default: the truthy words and any unrecognised value all verify.
+	for _, v := range []string{"1", "true", "TRUE", "yes", "on", "maybe"} {
+		set(v, true)
 		if !VerifyRequired() {
 			t.Errorf("PKGX_VERIFY=%q should require verify", v)
 		}
 	}
+	// Unset (absent) also verifies.
+	set("", false)
+	if !VerifyRequired() {
+		t.Error("unset PKGX_VERIFY should require verify")
+	}
 	// Only an explicit opt-out disables it.
 	for _, v := range []string{"0", "false", "FALSE", "off", "no"} {
-		t.Setenv("PKGX_VERIFY", v)
+		set(v, true)
 		if VerifyRequired() {
 			t.Errorf("PKGX_VERIFY=%q should not require verify", v)
 		}
+	}
+}
+
+func TestVerifyRequiredFromConfig(t *testing.T) {
+	// With no env var, the config file value disables verification.
+	writeConfig(t, `PKGX_VERIFY = false`)
+	setLookup(nil)
+	if VerifyRequired() {
+		t.Error("config PKGX_VERIFY=false should disable verification")
 	}
 }
 

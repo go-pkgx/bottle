@@ -30,7 +30,7 @@ var (
 	PantryBase = "https://raw.githubusercontent.com/pkgxdev/pantry/main/projects"
 )
 
-func init() { applyEnv(os.Getenv) }
+func init() { applyEnv(Env) }
 
 // ociClientCache memoises OCIClients by dist base so the bearer-token cache is
 // reused across calls (and rebuilds automatically when DistBase changes, e.g. in
@@ -67,7 +67,7 @@ func applyEnv(get func(string) string) {
 
 // Dir resolves the bottle store (PKGX_DIR, default ~/.pkgx).
 func Dir() string {
-	if d := os.Getenv("PKGX_DIR"); d != "" {
+	if d := Env("PKGX_DIR"); d != "" {
 		return d
 	}
 	home, _ := os.UserHomeDir()

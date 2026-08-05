@@ -333,6 +333,8 @@ func TestHTTPGetError(t *testing.T) {
 }
 
 func TestDirDefault(t *testing.T) {
+	// Empty config so PKGX_DIR resolution depends only on the environment.
+	setConfigPath(t, filepath.Join(t.TempDir(), "absent.hcl2"))
 	t.Setenv("PKGX_DIR", "")
 	t.Setenv("HOME", "/tmp/homeX")
 	if got := Dir(); got != "/tmp/homeX/.pkgx" {
