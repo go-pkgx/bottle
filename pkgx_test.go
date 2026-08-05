@@ -61,6 +61,18 @@ func TestSatisfies(t *testing.T) {
 		{"1.2.4", "=1.2.3", false},
 		{"1.2.3", "'^1'", true}, // quoted
 		{"0.9.0", "^1", false},
+		// upper-bound operators (build-dep pins like `llvm.org: <19`)
+		{"18.1.8", "<19", true},
+		{"19.0.0", "<19", false},
+		{"20.1.0", "<19", false},
+		{"16.0.6", "<19", true},
+		{"19.0.0", "<=19", true},
+		{"19.0.1", "<=19", false},
+		{"18.0.0", "<= 19", true}, // spaced upper bound
+		{"20.0.0", ">19", true},
+		{"19.0.0", ">19", false},
+		{"18.9.9", ">19", false},
+		{"19.5.0", "> 19", true}, // spaced lower bound
 	}
 	for _, c := range cases {
 		if got := ParseVer(c.v).satisfies(c.c); got != c.want {
@@ -196,6 +208,130 @@ func TestFetchVersionsAndPick(t *testing.T) {
 	}
 	if _, err := PickVersion("acme.org/tool", "^9"); err == nil {
 		t.Fatal("expected no-match error for ^9")
+	}
+}
+
+// upstreamVersionsServer spins a fake upstream pkgx dist that serves a project's
+// per-arch versions.txt, and records how many times it was hit. It is used to
+// prove the OCI-registry version listing falls back to the upstream dist for
+// build-time deps not published to the OCI DistBase.
+func upstreamVersionsServer(t *testing.T, project, osn, arch string, versions []string) (url string, hits *int) {
+	t.Helper()
+	var n int
+	want := "/" + project + "/" + osn + "/" + arch + "/versions.txt"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		if r.URL.Path != want {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, strings.Join(versions, "\n"))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, &n
+}
+
+// TestVersionsForOCIEmptyFallsBackToUpstream: when the OCI registry lists zero
+// versions for a project (a build-dep not published there), VersionsFor falls
+// back to the upstream pkgx dist so the concrete install version resolves.
+func TestVersionsForOCIEmptyFallsBackToUpstream(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	defer fr.close()
+	// The repo exists but carries no tags → ListTags returns an empty slice, no
+	// error (the exact shape a not-yet-mirrored build-dep produces on ghcr).
+	fr.mu.Lock()
+	fr.tags["go-pkgx/packages/llvm.org"] = map[string]bool{}
+	fr.mu.Unlock()
+
+	up, hits := upstreamVersionsServer(t, "llvm.org", "linux", "aarch64",
+		[]string{"16.0.6", "18.1.8", "20.1.0"})
+	oldDist, oldUp := DistBase, UpstreamDist
+	DistBase, UpstreamDist = fr.base("go-pkgx/packages"), up
+	defer func() { DistBase, UpstreamDist = oldDist, oldUp; resetOCICache() }()
+	resetOCICache()
+
+	vs, err := VersionsFor("llvm.org", "linux", "aarch64")
+	if err != nil {
+		t.Fatalf("VersionsFor: %v", err)
+	}
+	if len(vs) != 3 || vs[0].Raw != "16.0.6" || vs[2].Raw != "20.1.0" {
+		t.Fatalf("upstream fallback versions = %v", vs)
+	}
+	if *hits == 0 {
+		t.Error("expected the upstream dist to be consulted")
+	}
+	// And the build-time constraint form pkgx uses ("<19") selects the highest
+	// satisfying version from that fallback list.
+	var best Ver
+	for _, ver := range vs {
+		if ver.satisfies("<19") {
+			best = ver
+		}
+	}
+	if best.Raw != "18.1.8" {
+		t.Fatalf("highest <19 = %q, want 18.1.8", best.Raw)
+	}
+}
+
+// TestVersionsForOCINonEmptyShortCircuits: when the OCI registry has versions,
+// VersionsFor returns them and never consults the upstream dist.
+func TestVersionsForOCINonEmptyShortCircuits(t *testing.T) {
+	t.Setenv("PKGX_VERIFY", "0")
+	fr := newFakeRegistry(t, false)
+	defer fr.close()
+	c, err := NewOCIClient(fr.base("go-pkgx/packages"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Push("acme.org/tool", "2.5.0", "linux", "aarch64", makeGzTarball("x"), ".tar.gz"); err != nil {
+		t.Fatal(err)
+	}
+	up, hits := upstreamVersionsServer(t, "acme.org/tool", "linux", "aarch64", []string{"9.9.9"})
+	oldDist, oldUp := DistBase, UpstreamDist
+	DistBase, UpstreamDist = fr.base("go-pkgx/packages"), up
+	defer func() { DistBase, UpstreamDist = oldDist, oldUp; resetOCICache() }()
+	resetOCICache()
+
+	vs, err := VersionsFor("acme.org/tool", "linux", "aarch64")
+	if err != nil || len(vs) != 1 || vs[0].Raw != "2.5.0" {
+		t.Fatalf("OCI versions = %v err=%v", vs, err)
+	}
+	if *hits != 0 {
+		t.Errorf("upstream dist must not be consulted when OCI has versions (hits=%d)", *hits)
+	}
+}
+
+// TestVersionsForOCIEmptyUpstreamError: a failing upstream dist propagates its
+// error through the fallback.
+func TestVersionsForOCIEmptyUpstreamError(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	defer fr.close()
+	fr.mu.Lock()
+	fr.tags["go-pkgx/packages/ghost.org"] = map[string]bool{}
+	fr.mu.Unlock()
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", 500)
+	}))
+	defer up.Close()
+	oldDist, oldUp := DistBase, UpstreamDist
+	DistBase, UpstreamDist = fr.base("go-pkgx/packages"), up.URL
+	defer func() { DistBase, UpstreamDist = oldDist, oldUp; resetOCICache() }()
+	resetOCICache()
+	if _, err := VersionsFor("ghost.org", "linux", "aarch64"); err == nil {
+		t.Fatal("expected upstream HTTP error to propagate")
+	}
+}
+
+// TestVersionsForNonOCIDist: a plain static-HTTP DistBase still lists versions
+// directly (no OCI, no fallback).
+func TestVersionsForNonOCIDist(t *testing.T) {
+	up, _ := upstreamVersionsServer(t, "plain.org", "linux", "aarch64", []string{"1.0.0", "1.1.0"})
+	oldDist := DistBase
+	DistBase = up // non-oci:// → httpVersionsFor(DistBase, ...)
+	defer func() { DistBase = oldDist }()
+	vs, err := VersionsFor("plain.org", "linux", "aarch64")
+	if err != nil || len(vs) != 2 || vs[1].Raw != "1.1.0" {
+		t.Fatalf("non-OCI versions = %v err=%v", vs, err)
 	}
 }
 

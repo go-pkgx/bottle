@@ -28,6 +28,13 @@ import (
 var (
 	DistBase   = "oci://ghcr.io/go-pkgx/packages"
 	PantryBase = "https://raw.githubusercontent.com/pkgxdev/pantry/main/projects"
+
+	// UpstreamDist is the canonical pkgx distribution used to list versions for
+	// projects that are not (yet) published to an OCI DistBase — typically
+	// build-time deps such as llvm.org, perl.org or qt.io. It mirrors what
+	// `pkgx +<pkg>` installs, so a {{deps.<p>.prefix}} token resolves to the same
+	// version pkgx actually installs at build time. Overridable in tests.
+	UpstreamDist = "https://dist.pkgx.dev"
 )
 
 func init() { applyEnv(Env) }
@@ -127,17 +134,25 @@ func cmpVer(a, b Ver) int {
 
 // satisfies reports whether version v meets a pkgx constraint string.
 // Supported: "" / "*" (any), "^A.B.C" (>=, same major), "~A.B.C" (>=, same
-// major.minor), ">=A.B.C", and a bare "A.B.C" (treated as a caret-style
-// lower bound so partial pins like "1" or "1.1" match a whole line).
+// major.minor), the range operators ">=", ">", "<=", "<", an exact "=A.B.C",
+// and a bare "A.B.C" (treated as a caret-style lower bound so partial pins like
+// "1" or "1.1" match a whole line). The upper-bound operators "<"/"<=" are what
+// build-dep pins such as `llvm.org: <19` use.
 func (v Ver) satisfies(c string) bool {
 	c = strings.TrimSpace(strings.Trim(c, "'\""))
 	if c == "" || c == "*" {
 		return true
 	}
 	op := "^"
-	switch {
+	switch { // longer operators first so ">=" beats ">" and "<=" beats "<"
 	case strings.HasPrefix(c, ">="):
 		op, c = ">=", strings.TrimSpace(c[2:])
+	case strings.HasPrefix(c, "<="):
+		op, c = "<=", strings.TrimSpace(c[2:])
+	case strings.HasPrefix(c, ">"):
+		op, c = ">", strings.TrimSpace(c[1:])
+	case strings.HasPrefix(c, "<"):
+		op, c = "<", strings.TrimSpace(c[1:])
 	case strings.HasPrefix(c, "^"):
 		op, c = "^", c[1:]
 	case strings.HasPrefix(c, "~"):
@@ -149,6 +164,12 @@ func (v Ver) satisfies(c string) bool {
 	switch op {
 	case ">=":
 		return cmpVer(v, base) >= 0
+	case ">":
+		return cmpVer(v, base) > 0
+	case "<=":
+		return cmpVer(v, base) <= 0
+	case "<":
+		return cmpVer(v, base) < 0
 	case "=":
 		return cmpVer(v, base) == 0
 	case "~":
@@ -211,11 +232,32 @@ func FetchVersions(project string) ([]Ver, error) {
 // VersionsFor returns the available versions of a project for an explicit pkgx
 // os/arch slug (e.g. "linux"/"aarch64"), ascending. Used by mirror tooling that
 // spans arches other than the host's.
+//
+// When DistBase is an OCI registry (the factory default), version listing comes
+// from that registry's tags. That registry is a growing subset of the upstream
+// catalogue, so build-time deps (e.g. llvm.org, perl.org) may not be published
+// there yet and list zero versions. In that case we fall back to the upstream
+// pkgx dist so dep resolution matches the version `pkgx +<pkg>` installs at build
+// time — the actual bottle *pull* still goes through DistBase unchanged, so this
+// only affects version listing, not the install source.
 func VersionsFor(project, osn, arch string) ([]Ver, error) {
 	if IsOCI(DistBase) {
-		return ociVersionsFor(project)
+		vs, err := ociVersionsFor(project)
+		if err != nil {
+			return nil, err
+		}
+		if len(vs) > 0 {
+			return vs, nil
+		}
+		return httpVersionsFor(UpstreamDist, project, osn, arch)
 	}
-	body, err := httpGet(fmt.Sprintf("%s/%s/%s/%s/versions.txt", DistBase, project, osn, arch))
+	return httpVersionsFor(DistBase, project, osn, arch)
+}
+
+// httpVersionsFor lists a project's versions from a static pkgx dist tree's
+// per-arch versions.txt, ascending.
+func httpVersionsFor(base, project, osn, arch string) ([]Ver, error) {
+	body, err := httpGet(fmt.Sprintf("%s/%s/%s/%s/versions.txt", base, project, osn, arch))
 	if err != nil {
 		return nil, err
 	}
