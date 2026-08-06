@@ -244,6 +244,15 @@ func VersionsFor(project, osn, arch string) ([]Ver, error) {
 	if IsOCI(DistBase) {
 		vs, err := ociVersionsFor(project)
 		if err != nil {
+			// A project we have never published isn't a repository in our
+			// registry at all — ghcr answers the tag listing with 404
+			// NAME_UNKNOWN. That is the same "not carried here" case as an empty
+			// list (a build-dep like rust-lang.org/curl.se/python.org), so fall
+			// back to the upstream dist rather than failing the whole recipe.
+			// Genuine transient/auth errors still propagate.
+			if repoAbsent(err) {
+				return httpVersionsFor(UpstreamDist, project, osn, arch)
+			}
 			return nil, err
 		}
 		if len(vs) > 0 {
@@ -252,6 +261,18 @@ func VersionsFor(project, osn, arch string) ([]Ver, error) {
 		return httpVersionsFor(UpstreamDist, project, osn, arch)
 	}
 	return httpVersionsFor(DistBase, project, osn, arch)
+}
+
+// repoAbsent reports whether err signals that the OCI registry simply does not
+// carry the project (ghcr returns HTTP 404 with "name unknown: repository name
+// not known to registry"), as opposed to a transient or auth error that should
+// propagate.
+func repoAbsent(err error) bool {
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "name unknown") ||
+		strings.Contains(s, "not known to registry") ||
+		strings.Contains(s, "not found") ||
+		strings.Contains(s, "404")
 }
 
 // httpVersionsFor lists a project's versions from a static pkgx dist tree's

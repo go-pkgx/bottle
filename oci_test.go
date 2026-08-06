@@ -354,15 +354,45 @@ func TestOCIAuthChallengeFlow(t *testing.T) {
 	}
 }
 
+// TestOCIListVersionsMissingRepo: a project our registry has never published is
+// not a repository there at all — ghcr answers the tag listing with 404
+// NAME_UNKNOWN. That "not carried here" case must fall back to the upstream
+// dist (same as an empty tag list), not fail the recipe.
 func TestOCIListVersionsMissingRepo(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	old := DistBase
-	DistBase = fr.base("go-pkgx/bottles")
-	defer func() { DistBase = old; resetOCICache() }()
+	// "rust-lang.org" is absent from fr.tags → the tag listing 404s.
+	up, hits := upstreamVersionsServer(t, "rust-lang.org", "linux", "x86-64", []string{"1.88.0", "1.90.0"})
+	oldDist, oldUp := DistBase, UpstreamDist
+	DistBase, UpstreamDist = fr.base("go-pkgx/packages"), up
+	defer func() { DistBase, UpstreamDist = oldDist, oldUp; resetOCICache() }()
 	resetOCICache()
-	if _, err := VersionsFor("nope.test", "linux", "x86-64"); err == nil {
-		t.Error("expected error for an unknown repo")
+
+	vs, err := VersionsFor("rust-lang.org", "linux", "x86-64")
+	if err != nil {
+		t.Fatalf("expected upstream fallback, got err: %v", err)
+	}
+	if len(vs) != 2 || vs[1].Raw != "1.90.0" {
+		t.Fatalf("fallback versions = %v", vs)
+	}
+	if *hits == 0 {
+		t.Error("expected the upstream dist to be consulted on a 404 repo")
+	}
+}
+
+// TestVersionsForOCIErrorPropagates: a non-absent registry error (a transient
+// 5xx / auth failure, not a 404 NAME_UNKNOWN) must propagate, not be masked by
+// the upstream fallback.
+func TestVersionsForOCIErrorPropagates(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	defer fr.close()
+	fr.hook = func(*http.Request) (int, bool) { return http.StatusInternalServerError, true }
+	oldDist := DistBase
+	DistBase = fr.base("go-pkgx/packages")
+	defer func() { DistBase = oldDist; resetOCICache() }()
+	resetOCICache()
+	if _, err := VersionsFor("acme.org/tool", "linux", "x86-64"); err == nil {
+		t.Error("expected a 5xx registry error to propagate, not fall back")
 	}
 }
 
