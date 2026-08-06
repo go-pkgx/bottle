@@ -6,9 +6,11 @@
 
 The pure-Go **pkgx bottle client** — the shared backend of the pure-Go pkgx
 family. It resolves a package's dependency closure from the pkgx pantry,
-downloads the bottles from `dist.pkgx.dev`, completes the implicit
-libc/gcc closure a `FROM scratch` image needs, and execs through the pkgx
-glibc loader. `CGO_ENABLED=0`, no runtime dependencies of its own.
+downloads the bottles from the configured `PKGX_DIST` (default: the signed
+`oci://ghcr.io/go-pkgx/packages` registry; set `https://dist.pkgx.dev` for the
+full unsigned upstream pantry), completes the implicit libc/gcc closure a
+`FROM scratch` image needs, and execs through the pkgx glibc loader.
+`CGO_ENABLED=0`, no runtime dependencies of its own.
 
 Consumed by:
 
