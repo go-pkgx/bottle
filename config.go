@@ -5,9 +5,10 @@ package bottle
 // The file is an HCL2 top-level-attribute settings file: a flat list of
 // `NAME = <value>` attributes (no blocks), where <value> is a string, bool, or
 // number. Any PKGX_* / OCI_* variable the tools read can be given a default
-// here. It is parsed with the real HCL2 library (github.com/hashicorp/hcl/v2)
-// via the generic JustAttributes API, so every attribute is handled uniformly
-// and the standard HCL2 comment/quoting/escape rules apply.
+// here. It is parsed with the org's own pure-Go, zero-dependency HCL2 library
+// (github.com/go-ruby-hcl2/hcl2), so every attribute is handled uniformly and
+// the standard HCL2 comment/quoting/escape rules apply — with no third-party
+// dependency to vendor.
 //
 // Precedence (see Env): a real process environment variable — present AND
 // non-empty — always wins; otherwise the value from config.hcl2 is used;
@@ -15,13 +16,13 @@ package bottle
 // environment variable can still override.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 
-	"github.com/hashicorp/hcl/v2"
-	"github.com/hashicorp/hcl/v2/hclparse"
-	"github.com/zclconf/go-cty/cty"
+	"github.com/go-ruby-hcl2/hcl2"
 )
 
 // lookupEnv is os.LookupEnv, swappable in tests.
@@ -72,51 +73,57 @@ func loadConfig() {
 }
 
 // parseConfigFile parses an HCL2 top-level-attribute file into a string map.
+// Blocks are rejected (the file is attributes-only, matching the semantics of
+// hashicorp/hcl's JustAttributes). Each attribute expression is evaluated with a
+// nil context — so a bare identifier is an unresolved-variable error, exactly as
+// before — and the resulting scalar is rendered by valueToString.
 func parseConfigFile(path string) (map[string]string, error) {
-	f, diags := hclparse.NewParser().ParseHCLFile(path)
-	if diags.HasErrors() {
-		return nil, diags
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
 	}
-	attrs, diags := f.Body.JustAttributes()
-	if diags.HasErrors() {
-		return nil, diags // blocks or other non-attribute content
+	body, err := hcl2.Parse(string(b))
+	if err != nil {
+		return nil, err
 	}
-	out := make(map[string]string, len(attrs))
-	for name, a := range attrs {
-		v, d := a.Expr.Value(nil)
-		if d.HasErrors() {
-			return nil, d
-		}
-		s, err := ctyToString(v)
+	if len(body.Blocks) > 0 {
+		return nil, fmt.Errorf("config %s: blocks are not allowed, only top-level attributes", path)
+	}
+	out := make(map[string]string, len(body.Attributes))
+	for _, a := range body.Attributes {
+		v, _, err := body.Attr(a.Name, nil)
 		if err != nil {
 			return nil, err
 		}
-		out[name] = s
+		s, err := valueToString(v)
+		if err != nil {
+			return nil, err
+		}
+		out[a.Name] = s
 	}
 	return out, nil
 }
 
-// ctyToString renders a scalar cty value as the string form the tools consume:
-// a string as-is, a bool as "true"/"false", and a number without trailing
-// zeros (so `PKGX_VERIFY = true` → "true" and a port stays clean). Any other
-// type (list, object, null, …) is rejected — the settings file is scalar-only.
-func ctyToString(v cty.Value) (string, error) {
-	switch v.Type() {
-	case cty.String:
-		return v.AsString(), nil
-	case cty.Bool:
-		if v.True() {
+// valueToString renders a scalar HCL2 value as the string form the tools consume:
+// a string as-is, a bool as "true"/"false", and a number without trailing zeros
+// (so `PKGX_VERIFY = true` → "true" and a port stays clean). hcl2 narrows an
+// integral number to int64 and a fractional one to float64. Any other type
+// (tuple, object, null, …) is rejected — the settings file is scalar-only.
+func valueToString(v hcl2.Value) (string, error) {
+	switch x := v.(type) {
+	case string:
+		return x, nil
+	case bool:
+		if x {
 			return "true", nil
 		}
 		return "false", nil
-	case cty.Number:
-		return v.AsBigFloat().Text('f', -1), nil
+	case int64:
+		return strconv.FormatInt(x, 10), nil
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64), nil
 	default:
-		return "", &hcl.Diagnostic{
-			Severity: hcl.DiagError,
-			Summary:  "unsupported config value",
-			Detail:   "config attributes must be a string, bool, or number",
-		}
+		return "", fmt.Errorf("unsupported config value: attributes must be a string, bool, or number, got %T", v)
 	}
 }
 

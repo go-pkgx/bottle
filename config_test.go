@@ -180,6 +180,16 @@ func TestConfigStatError(t *testing.T) {
 	}
 }
 
+func TestParseConfigFileReadError(t *testing.T) {
+	// parseConfigFile reads the file itself; a path that exists but cannot be
+	// read as a regular file (a directory) must surface the read error. This
+	// covers the branch between loadConfig's successful Stat and the parse.
+	dir := t.TempDir()
+	if _, err := parseConfigFile(dir); err == nil {
+		t.Fatal("expected a read error for a directory path")
+	}
+}
+
 func TestConfigDefaultPath(t *testing.T) {
 	// Exercise the real configPathFn (UserHomeDir-based) with a home that has no
 	// config file: it must resolve cleanly to "" with no error.
