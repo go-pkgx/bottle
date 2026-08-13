@@ -563,3 +563,65 @@ func TestUntarUnsafePath(t *testing.T) {
 		t.Fatal("expected unsafe-path error")
 	}
 }
+
+// TestPantryOverlay: a recipe present in the overlay is served from there; one
+// absent from the overlay falls back to PantryBase.
+func TestPantryOverlay(t *testing.T) {
+	osn, _ := HostSlug()
+	overridden := "dependencies:\n  openssl.org: '*'\nprovides:\n  - bin/curl\n"
+	upstream := "dependencies:\n  openssl.org: ^1.1\nprovides:\n  - bin/curl\n"
+	base := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/curl.se/package.yml":
+			fmt.Fprint(w, upstream)
+		case "/zlib.net/package.yml":
+			fmt.Fprint(w, "provides:\n  - lib/libz."+osn+"\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer base.Close()
+	overlay := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/curl.se/package.yml" {
+			fmt.Fprint(w, overridden)
+			return
+		}
+		http.NotFound(w, r) // overlay only carries curl.se
+	}))
+	defer overlay.Close()
+
+	ob, op := PantryBase, PantryOverlay
+	defer func() { PantryBase, PantryOverlay = ob, op }()
+	PantryBase, PantryOverlay = base.URL, overlay.URL
+
+	// overlay hit -> corrected constraint
+	deps, _, err := FetchMeta("curl.se")
+	if err != nil || deps["openssl.org"] != "*" {
+		t.Fatalf("overlay hit: deps=%v err=%v (want openssl.org=*)", deps, err)
+	}
+	// overlay miss -> fall back to base (must still resolve)
+	if _, _, err := FetchMeta("zlib.net"); err != nil {
+		t.Fatalf("overlay miss fallback: %v", err)
+	}
+	// with no overlay, base is used verbatim
+	PantryOverlay = ""
+	deps, _, err = FetchMeta("curl.se")
+	if err != nil || deps["openssl.org"] != "^1.1" {
+		t.Fatalf("no overlay: deps=%v err=%v (want openssl.org=^1.1)", deps, err)
+	}
+}
+
+func TestApplyEnvOverlay(t *testing.T) {
+	ob := PantryOverlay
+	defer func() { PantryOverlay = ob }()
+	PantryOverlay = ""
+	applyEnv(func(k string) string {
+		if k == "PKGX_PANTRY_OVERLAY" {
+			return "https://ov.example/projects/"
+		}
+		return ""
+	})
+	if PantryOverlay != "https://ov.example/projects" {
+		t.Errorf("PantryOverlay = %q", PantryOverlay)
+	}
+}
