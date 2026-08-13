@@ -34,6 +34,7 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	oras "oras.land/oras-go/v2"
 	orascontent "oras.land/oras-go/v2/content"
+	"oras.land/oras-go/v2/errdef"
 	"oras.land/oras-go/v2/registry/remote"
 	"oras.land/oras-go/v2/registry/remote/auth"
 )
@@ -202,6 +203,30 @@ func (c *OCIClient) repository(project string) (*remote.Repository, error) {
 
 // --- pull -------------------------------------------------------------------
 
+// errPlatformAbsent marks "the version tag exists but has no manifest for this
+// os/arch" — a not-published signal (not a transport error) for HasPlatform.
+var errPlatformAbsent = errors.New("platform not in index")
+
+// HasPlatform reports whether (project, ver) is published for os/arch in the
+// registry: true if a per-platform manifest resolves, false if the tag or the
+// platform is absent (a not-yet-published signal), and an error only on a real
+// transport/parse failure. The build factory uses it to skip already-published
+// (project,version,platform) tuples — a pure-Go replacement for the curl+jq
+// ghcr manifest probe.
+func (c *OCIClient) HasPlatform(project, ver, osn, arch string) (bool, error) {
+	repo, err := c.repository(project)
+	if err != nil {
+		return false, err
+	}
+	if _, _, err := c.resolvePlatform(context.Background(), repo, project, ver, osn, arch); err != nil {
+		if errors.Is(err, errPlatformAbsent) || errors.Is(err, errdef.ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 // ListTags returns the tags (versions) published for a project, or an error if
 // the repository does not exist.
 func (c *OCIClient) ListTags(project string) ([]string, error) {
@@ -279,7 +304,7 @@ func (c *OCIClient) resolvePlatform(ctx context.Context, repo *remote.Repository
 			}
 		}
 		if pick == nil {
-			return ocispec.Descriptor{}, ocispec.Manifest{}, fmt.Errorf("no bottle for %s v%s (%s/%s): platform not in index", project, ver, osn, arch)
+			return ocispec.Descriptor{}, ocispec.Manifest{}, fmt.Errorf("no bottle for %s v%s (%s/%s): %w", project, ver, osn, arch, errPlatformAbsent)
 		}
 		manDesc = *pick
 		manBytes, err = orascontent.FetchAll(ctx, repo, *pick)

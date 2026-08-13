@@ -759,3 +759,36 @@ func TestOCIPushAnnotated(t *testing.T) {
 		t.Error("created annotation lost")
 	}
 }
+
+// TestOCIHasPlatform: the pure-Go published-check (skip logic for the factory).
+func TestOCIHasPlatform(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.PushWithReferrers("has.test", "1.0.0", "linux", "x86-64", makeGzTarball("b"), ".tar.gz", nil); err != nil {
+		t.Fatal(err)
+	}
+	// present
+	if ok, err := c.HasPlatform("has.test", "1.0.0", "linux", "x86-64"); !ok || err != nil {
+		t.Errorf("present: ok=%v err=%v", ok, err)
+	}
+	// tag exists but this arch is not in the index → not published, no error
+	if ok, err := c.HasPlatform("has.test", "1.0.0", "linux", "aarch64"); ok || err != nil {
+		t.Errorf("platform-absent: ok=%v err=%v", ok, err)
+	}
+	// tag absent → not published, no error
+	if ok, err := c.HasPlatform("has.test", "9.9.9", "linux", "x86-64"); ok || err != nil {
+		t.Errorf("tag-absent: ok=%v err=%v", ok, err)
+	}
+	// invalid project ref → repository() error
+	if _, err := c.HasPlatform("BAD REF!!", "1", "linux", "x86-64"); err == nil {
+		t.Error("invalid project ref should error")
+	}
+	// transport failure (server closed) → real error, not a false
+	fr.close()
+	if _, err := c.HasPlatform("has.test", "1.0.0", "linux", "x86-64"); err == nil {
+		t.Error("closed registry should surface a transport error")
+	}
+}
