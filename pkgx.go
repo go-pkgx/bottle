@@ -29,6 +29,14 @@ var (
 	DistBase   = "oci://ghcr.io/go-pkgx/packages"
 	PantryBase = "https://raw.githubusercontent.com/pkgxdev/pantry/main/projects"
 
+	// PantryOverlay (PKGX_PANTRY_OVERLAY), when set, is consulted for a project's
+	// package.yml BEFORE PantryBase, falling back to PantryBase when the overlay
+	// has no recipe for that project. This lets a small curated overlay carry
+	// corrected recipes (e.g. a stale `openssl.org: ^1.1` bumped to a modern
+	// constraint that matches the published bottles) without forking the whole
+	// pantry — everything the overlay does not override resolves upstream.
+	PantryOverlay = ""
+
 	// UpstreamDist is the canonical pkgx distribution used to list versions for
 	// projects that are not (yet) published to an OCI DistBase — typically
 	// build-time deps such as llvm.org, perl.org or qt.io. It mirrors what
@@ -70,6 +78,20 @@ func applyEnv(get func(string) string) {
 	if p := get("PKGX_PANTRY"); p != "" {
 		PantryBase = strings.TrimRight(p, "/")
 	}
+	if p := get("PKGX_PANTRY_OVERLAY"); p != "" {
+		PantryOverlay = strings.TrimRight(p, "/")
+	}
+}
+
+// fetchRecipe returns a project's package.yml, trying PantryOverlay first (when
+// set) and falling back to PantryBase when the overlay lacks that project.
+func fetchRecipe(project string) ([]byte, error) {
+	if PantryOverlay != "" {
+		if body, err := httpGet(fmt.Sprintf("%s/%s/package.yml", PantryOverlay, project)); err == nil {
+			return body, nil
+		}
+	}
+	return httpGet(fmt.Sprintf("%s/%s/package.yml", PantryBase, project))
 }
 
 // Dir resolves the bottle store (PKGX_DIR, default ~/.pkgx).
@@ -384,7 +406,7 @@ type pkgYML struct {
 // FetchMeta returns the host-relevant runtime dependencies (project ->
 // constraint) and the list of provided paths for a project's package.yml.
 func FetchMeta(project string) (deps map[string]string, provides []string, err error) {
-	body, err := httpGet(fmt.Sprintf("%s/%s/package.yml", PantryBase, project))
+	body, err := fetchRecipe(project)
 	if err != nil {
 		return nil, nil, err
 	}
