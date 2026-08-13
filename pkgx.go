@@ -327,6 +327,13 @@ func ociVersionsFor(project string) ([]Ver, error) {
 	}
 	var vs []Ver
 	for _, t := range tags {
+		// A glibc-flavored tag (<version>-glibc<ver>) is one BUILD of a version,
+		// not a version of its own — and it would otherwise outrank the plain
+		// tag it flavors (2.0-glibc2.27.0 parses as 2.0.0.2.27.0 > 2.0). Flavors
+		// are chosen deliberately, never by "newest".
+		if _, flavor := SplitFlavor(t); flavor != "" {
+			continue
+		}
 		vs = append(vs, ParseVer(t))
 	}
 	sort.Slice(vs, func(i, j int) bool { return cmpVer(vs[i], vs[j]) < 0 })
