@@ -378,7 +378,7 @@ func DownloadBottle(project, ver, osn, arch string) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("signature verification is on by default but PKGX_DIST=%s (HTTP) has no signatures; use an oci:// dist or set PKGX_VERIFY=0", DistBase)
 	}
 	base := fmt.Sprintf("%s/%s/%s/%s/v%s", DistBase, project, osn, arch, ver)
-	for _, ext := range []string{".tar.gz", ".tar.xz"} {
+	for _, ext := range []string{ExtTarGz, ExtTarXz} {
 		resp, err := HTTPClient.Get(base + ext)
 		if err != nil {
 			return nil, "", err
@@ -579,13 +579,13 @@ func fetchBottle(r Resolved, osn, arch string) (io.ReadCloser, bool, error) {
 		if err != nil {
 			return nil, false, err
 		}
-		return io.NopCloser(bytes.NewReader(data)), ext == ".tar.xz", nil
+		return io.NopCloser(bytes.NewReader(data)), ext == ExtTarXz, nil
 	}
 	base := fmt.Sprintf("%s/%s/%s/%s/v%s", DistBase, r.Project, osn, arch, r.Version.Raw)
 	for _, ext := range []struct {
 		suffix string
 		xz     bool
-	}{{".tar.gz", false}, {".tar.xz", true}} {
+	}{{ExtTarGz, false}, {ExtTarXz, true}} {
 		resp, err := HTTPClient.Get(base + ext.suffix)
 		if err != nil {
 			return nil, false, err

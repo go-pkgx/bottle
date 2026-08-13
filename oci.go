@@ -84,13 +84,13 @@ func pkgxArch(arch string) string {
 func extForLayer(mt string) string {
 	switch {
 	case strings.HasSuffix(mt, "tar+gzip"), strings.HasSuffix(mt, "tar.gzip"):
-		return ".tar.gz"
+		return ExtTarGz
 	case strings.HasSuffix(mt, "tar+xz"):
-		return ".tar.xz"
+		return ExtTarXz
 	case strings.Contains(mt, "gzip"):
-		return ".tar.gz"
+		return ExtTarGz
 	case strings.Contains(mt, "xz"):
-		return ".tar.xz"
+		return ExtTarXz
 	default:
 		return ""
 	}
@@ -414,7 +414,7 @@ func (c *OCIClient) push(project, ver, osn, arch string, tarball []byte, ext str
 		return ocispec.Descriptor{}, err
 	}
 	layerMedia := MediaBottleLayerGz
-	if ext == ".tar.xz" {
+	if ext == ExtTarXz {
 		layerMedia = MediaBottleLayerXz
 	}
 	layerDesc := orascontent.NewDescriptorFromBytes(layerMedia, tarball)

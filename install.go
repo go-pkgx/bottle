@@ -169,7 +169,7 @@ func FindLoader(dir string) string {
 	if name == "" {
 		return ""
 	}
-	matches, _ := filepath.Glob(filepath.Join(dir, "gnu.org/glibc", "v*", "lib", "glibc-*", name))
+	matches, _ := filepath.Glob(filepath.Join(dir, GlibcProject, "v*", "lib", "glibc-*", name))
 	if len(matches) > 0 {
 		return matches[len(matches)-1]
 	}
