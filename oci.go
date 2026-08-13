@@ -386,7 +386,7 @@ type Referrer struct {
 // version-tag image index (fetching any existing index first) and tags it. ext
 // selects the layer mediaType (".tar.gz" or ".tar.xz").
 func (c *OCIClient) Push(project, ver, osn, arch string, tarball []byte, ext string) error {
-	_, err := c.push(project, ver, osn, arch, tarball, ext, nil)
+	_, err := c.push(project, ver, osn, arch, tarball, ext, nil, nil)
 	return err
 }
 
@@ -396,10 +396,18 @@ func (c *OCIClient) Push(project, ver, osn, arch string, tarball []byte, ext str
 // version index is tagged, so a reader that resolves the index always finds a
 // manifest whose attestations are already present.
 func (c *OCIClient) PushWithReferrers(project, ver, osn, arch string, tarball []byte, ext string, refs []Referrer) (ocispec.Descriptor, error) {
-	return c.push(project, ver, osn, arch, tarball, ext, refs)
+	return c.push(project, ver, osn, arch, tarball, ext, refs, nil)
 }
 
-func (c *OCIClient) push(project, ver, osn, arch string, tarball []byte, ext string, refs []Referrer) (ocispec.Descriptor, error) {
+// PushWithReferrersAnnotated is PushWithReferrers plus annotations merged onto
+// the per-platform image manifest — used to carry descriptive metadata such as
+// org.go-pkgx.glibc.version and org.go-pkgx.glibc.min-kernel so glibc-flavored
+// bottles are self-describing.
+func (c *OCIClient) PushWithReferrersAnnotated(project, ver, osn, arch string, tarball []byte, ext string, refs []Referrer, annotations map[string]string) (ocispec.Descriptor, error) {
+	return c.push(project, ver, osn, arch, tarball, ext, refs, annotations)
+}
+
+func (c *OCIClient) push(project, ver, osn, arch string, tarball []byte, ext string, refs []Referrer, annotations map[string]string) (ocispec.Descriptor, error) {
 	ctx := context.Background()
 	repo, err := c.repository(project)
 	if err != nil {
@@ -414,11 +422,16 @@ func (c *OCIClient) push(project, ver, osn, arch string, tarball []byte, ext str
 		return ocispec.Descriptor{}, fmt.Errorf("push layer: %w", err)
 	}
 	// Pack + push a per-platform image manifest (config blob is created by ORAS).
+	// pin a fixed created-time so the manifest digest is reproducible, then merge
+	// any caller annotations (e.g. glibc.version/min-kernel).
+	manAnn := map[string]string{ocispec.AnnotationCreated: "1970-01-01T00:00:00Z"}
+	for k, v := range annotations {
+		manAnn[k] = v
+	}
 	manDesc, err := oras.PackManifest(ctx, repo, oras.PackManifestVersion1_1, ArtifactTypeBottle,
 		oras.PackManifestOptions{
-			Layers: []ocispec.Descriptor{layerDesc},
-			// pin a fixed created-time so the manifest digest is reproducible.
-			ManifestAnnotations: map[string]string{ocispec.AnnotationCreated: "1970-01-01T00:00:00Z"},
+			Layers:              []ocispec.Descriptor{layerDesc},
+			ManifestAnnotations: manAnn,
 		})
 	if err != nil {
 		return ocispec.Descriptor{}, fmt.Errorf("pack manifest: %w", err)
