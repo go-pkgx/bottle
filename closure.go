@@ -132,7 +132,10 @@ func scanNeeded(prefixes []string) map[string]bool {
 // bottles required to satisfy the implicit system libraries on a scratch image.
 // glibc is always included on linux (every dynamic ELF needs the loader+libc).
 func implicitRoots(needed map[string]bool) map[string]string {
-	roots := map[string]string{GlibcProject: "*"}
+	// glibc is the one implicit root whose newest is not always the right one:
+	// its loader refuses to run below the kernel floor it was built against, so
+	// the constraint is kernel-aware (and PKGX_GLIBC-pinnable). See glibc.go.
+	roots := map[string]string{GlibcProject: GlibcConstraint()}
 	if matchesAny(needed, libstdcxxSonames) {
 		roots["gnu.org/gcc/libstdcxx"] = "*"
 	}
