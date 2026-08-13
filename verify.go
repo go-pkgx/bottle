@@ -39,6 +39,13 @@ const (
 	// CosignSignatureAnnotation carries the base64 signature on the referrer
 	// manifest (cosign's convention).
 	CosignSignatureAnnotation = "dev.cosignproject.cosign/signature"
+
+	// GlibcVersionAnnotation / GlibcMinKernelAnnotation describe a glibc-flavored
+	// bottle on its per-platform manifest: the exact glibc it was built against,
+	// and (for the glibc bottle itself) glibc's min supported kernel from
+	// .note.ABI-tag. A glibc-aware resolver/selector reads these.
+	GlibcVersionAnnotation   = "org.go-pkgx.glibc.version"
+	GlibcMinKernelAnnotation = "org.go-pkgx.glibc.min-kernel"
 )
 
 // VerifySignature checks a cosign simple-signing signature over a bottle

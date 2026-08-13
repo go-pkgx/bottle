@@ -716,3 +716,46 @@ func TestUpsertPlatform(t *testing.T) {
 		t.Errorf("expected 3 platforms, got %d", len(list))
 	}
 }
+
+// TestOCIPushAnnotated: glibc annotations land on the per-platform manifest.
+func TestOCIPushAnnotated(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	defer fr.close()
+	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ann := map[string]string{
+		GlibcVersionAnnotation:   "2.27.0",
+		GlibcMinKernelAnnotation: "3.2.0",
+	}
+	manDesc, err := c.PushWithReferrersAnnotated("curl.se", "8.20-glibc2.27.0", "linux", "x86-64",
+		makeGzTarball("curl"), ".tar.gz", nil, ann)
+	if err != nil {
+		t.Fatalf("PushWithReferrersAnnotated: %v", err)
+	}
+	repo, err := c.repository("curl.se")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc, err := repo.Fetch(context.Background(), manDesc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	body, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var man ocispec.Manifest
+	if err := json.Unmarshal(body, &man); err != nil {
+		t.Fatal(err)
+	}
+	if man.Annotations[GlibcVersionAnnotation] != "2.27.0" || man.Annotations[GlibcMinKernelAnnotation] != "3.2.0" {
+		t.Errorf("manifest annotations = %v", man.Annotations)
+	}
+	// created-time annotation still present (not clobbered by the merge)
+	if man.Annotations[ocispec.AnnotationCreated] == "" {
+		t.Error("created annotation lost")
+	}
+}
