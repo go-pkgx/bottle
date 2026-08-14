@@ -334,10 +334,27 @@ func ociVersionsFor(project string) ([]Ver, error) {
 		if _, flavor := SplitFlavor(t); flavor != "" {
 			continue
 		}
+		if !isVersionTag(t) {
+			continue
+		}
 		vs = append(vs, ParseVer(t))
 	}
 	sort.Slice(vs, func(i, j int) bool { return cmpVer(vs[i], vs[j]) < 0 })
 	return vs, nil
+}
+
+// isVersionTag reports whether a registry tag names a package VERSION rather
+// than registry bookkeeping.
+//
+// This matters because ghcr implements no referrers API, so ORAS keeps each
+// bottle's attestations under a fallback tag named `sha256-<digest>`: those tags
+// sit in the same listing as the versions. Parsed as versions they became
+// phantom "0" entries — inflating every count, and (worse) making a listing
+// look non-empty so the upstream-dist fallback never engaged for a project we
+// had published only some versions of.
+func isVersionTag(tag string) bool {
+	s := strings.TrimPrefix(strings.TrimPrefix(tag, "v"), "V")
+	return s != "" && s[0] >= '0' && s[0] <= '9'
 }
 
 // PickVersion returns the highest available version satisfying constraint.
