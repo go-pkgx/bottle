@@ -85,9 +85,17 @@ func resetGlibcConstraint() {
 	glibcPin = ""
 }
 
+// GlibcFlavor is the glibc build variant this host asks for: the PKGX_GLIBC
+// pin, or "" for ordinary builds. A pinned host wants BOTH that exact glibc
+// bottle AND, wherever the factory published one, the tool built against it —
+// the `<version>-glibc<ver>` tag.
+func GlibcFlavor() string {
+	return strings.TrimPrefix(strings.TrimSpace(Env("PKGX_GLIBC")), "=")
+}
+
 func resolveGlibcConstraint() string {
-	if v := Env("PKGX_GLIBC"); v != "" {
-		return "=" + strings.TrimPrefix(strings.TrimSpace(v), "=")
+	if v := GlibcFlavor(); v != "" {
+		return "=" + v
 	}
 	kernel, err := HostKernel()
 	if err != nil || kernel == "" {

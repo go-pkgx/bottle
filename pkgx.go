@@ -111,9 +111,23 @@ func HostSlug() (string, string) {
 // --- version type + constraint matching ------------------------------------
 
 // Ver is a parsed pkgx version: its numeric components plus the raw string.
+//
+// Tag is the registry tag the version was found under, when that differs from
+// Raw — a glibc-flavored build lives at `<version>-glibc<ver>` while remaining
+// version <version>. Everything version-shaped (comparison, constraints, the
+// installed v<version> prefix) uses Raw; only the registry pull uses the tag.
 type Ver struct {
 	Raw  string
 	Nums []int
+	Tag  string
+}
+
+// tag is the registry tag to pull this version from.
+func (v Ver) tag() string {
+	if v.Tag != "" {
+		return v.Tag
+	}
+	return v.Raw
 }
 
 // ParseVer parses a pkgx version string into a Ver, stopping each component at
@@ -341,22 +355,44 @@ func ociVersionsFor(project string) ([]Ver, error) {
 	if err != nil {
 		return nil, err
 	}
-	var vs []Ver
+	return selectVersions(tags, GlibcFlavor()), nil
+}
+
+// selectVersions turns a registry tag listing into the candidate versions for a
+// host, ascending.
+//
+// A glibc-flavored tag (<version>-glibc<ver>) is one BUILD of a version, not a
+// version of its own: it must never outrank the plain tag it flavors
+// (2.0-glibc2.27.0 parses as 2.0.0.2.27.0 > 2.0). So flavors are matched
+// DELIBERATELY — a host that pinned PKGX_GLIBC takes the build made against that
+// glibc, every other flavor is ignored, and the result is independent of the
+// order the registry happens to list tags in.
+func selectVersions(tags []string, wantFlavor string) []Ver {
+	byVersion := map[string]Ver{}
 	for _, t := range tags {
-		// A glibc-flavored tag (<version>-glibc<ver>) is one BUILD of a version,
-		// not a version of its own — and it would otherwise outrank the plain
-		// tag it flavors (2.0-glibc2.27.0 parses as 2.0.0.2.27.0 > 2.0). Flavors
-		// are chosen deliberately, never by "newest".
-		if _, flavor := SplitFlavor(t); flavor != "" {
-			continue
-		}
 		if !isVersionTag(t) {
 			continue
 		}
-		vs = append(vs, ParseVer(t))
+		ver, flavor := SplitFlavor(t)
+		if flavor != "" && flavor != wantFlavor {
+			continue // built against some other glibc: never ours
+		}
+		// Key on the PARSED version, so "1.0.0" and "v1.0.0" are one version.
+		v := ParseVer(ver)
+		if prev, ok := byVersion[v.Raw]; ok && (prev.Tag != "" || flavor == "") {
+			continue // the flavored build wins when both exist for a version
+		}
+		if flavor != "" {
+			v.Tag = t
+		}
+		byVersion[v.Raw] = v
+	}
+	vs := make([]Ver, 0, len(byVersion))
+	for _, v := range byVersion {
+		vs = append(vs, v)
 	}
 	sort.Slice(vs, func(i, j int) bool { return cmpVer(vs[i], vs[j]) < 0 })
-	return vs, nil
+	return vs
 }
 
 // isVersionTag reports whether a registry tag names a package VERSION rather
@@ -615,7 +651,9 @@ func fetchBottle(r Resolved, osn, arch string) (io.ReadCloser, bool, error) {
 		if err != nil {
 			return nil, false, err
 		}
-		data, ext, err := c.Pull(r.Project, r.Version.Raw, osn, arch)
+		// The registry tag, which is the flavored one for a glibc-pinned build;
+		// the installed prefix stays v<version> either way.
+		data, ext, err := c.Pull(r.Project, r.Version.tag(), osn, arch)
 		if err != nil {
 			return nil, false, err
 		}
