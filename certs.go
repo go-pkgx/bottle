@@ -27,14 +27,23 @@ var HTTPClient = NewHTTPClient()
 // exercisable on a host that does have one.
 var systemCertPool = x509.SystemCertPool
 
-// NewHTTPClient builds an *http.Client that trusts the embedded CA bundle in
-// addition to the host's system trust store.
-func NewHTTPClient() *http.Client {
+// CertPool is the trust store the go-pkgx tools use: the host's, plus the
+// embedded Mozilla bundle. On a FROM-scratch image there is no system store at
+// all, so the embedded bundle is the only thing standing between a tool and
+// "x509: certificate signed by unknown authority" — which is exactly what bk hit
+// when it tried to reach github from inside a scratch builder.
+func CertPool() *x509.CertPool {
 	pool, err := systemCertPool()
 	if err != nil || pool == nil {
 		pool = x509.NewCertPool()
 	}
 	pool.AppendCertsFromPEM(cacert)
+	return pool
+}
+
+// NewHTTPClient builds an *http.Client that trusts CertPool.
+func NewHTTPClient() *http.Client {
+	pool := CertPool()
 	// NO whole-request Timeout: it caps a transfer by TOTAL elapsed time, which
 	// kills a healthy but slow download of a large bottle (llvm.org and gcc are
 	// ~1 GB; five minutes is not enough on a modest link, and the failure looks
