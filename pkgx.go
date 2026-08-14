@@ -291,10 +291,26 @@ func VersionsFor(project, osn, arch string) ([]Ver, error) {
 // propagate.
 func repoAbsent(err error) bool {
 	s := strings.ToLower(err.Error())
-	return strings.Contains(s, "name unknown") ||
+	if strings.Contains(s, "name unknown") ||
 		strings.Contains(s, "not known to registry") ||
 		strings.Contains(s, "not found") ||
-		strings.Contains(s, "404")
+		strings.Contains(s, "404") {
+		return true
+	}
+	// ghcr does not answer 404 for a repository that does not exist: an
+	// ANONYMOUS token request for it is denied with 403, indistinguishable from
+	// "exists but you may not read it". For a public registry read without
+	// credentials the useful reading is "we do not carry this package" — so fall
+	// back to upstream, exactly as an empty listing would. With credentials
+	// configured a 403 IS an access problem and must surface: masking it would
+	// hide a broken token behind silently different resolution.
+	return anonymousRead() && strings.Contains(s, "403")
+}
+
+// anonymousRead reports whether the registry is being read with no credentials
+// at all (no OCI_TOKEN, no OCI_USERNAME/OCI_PASSWORD).
+func anonymousRead() bool {
+	return Env("OCI_TOKEN") == "" && Env("OCI_USERNAME") == "" && Env("OCI_PASSWORD") == ""
 }
 
 // httpVersionsFor lists a project's versions from a static pkgx dist tree's
