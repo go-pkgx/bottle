@@ -4,7 +4,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	_ "embed"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -31,10 +35,88 @@ func NewHTTPClient() *http.Client {
 		pool = x509.NewCertPool()
 	}
 	pool.AppendCertsFromPEM(cacert)
+	// NO whole-request Timeout: it caps a transfer by TOTAL elapsed time, which
+	// kills a healthy but slow download of a large bottle (llvm.org and gcc are
+	// ~1 GB; five minutes is not enough on a modest link, and the failure looks
+	// like "context deadline exceeded" rather than "too slow"). What must be
+	// bounded is a STALL, so the connection setup and the response headers get
+	// deadlines, and the body is watched for silence.
 	return &http.Client{
-		Timeout: 5 * time.Minute,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{RootCAs: pool},
+		Transport: &stallTransport{
+			idle: stallTimeout,
+			base: &http.Transport{
+				TLSClientConfig:       &tls.Config{RootCAs: pool},
+				DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
+				TLSHandshakeTimeout:   30 * time.Second,
+				ResponseHeaderTimeout: 60 * time.Second,
+				ForceAttemptHTTP2:     true,
+			},
 		},
 	}
+}
+
+// stallTimeout is how long a transfer may deliver nothing before it is treated
+// as dead. Progress resets it, so a big bottle can take as long as it needs.
+var stallTimeout = 60 * time.Second
+
+// stallTransport guards every response body against a stalled transfer.
+type stallTransport struct {
+	base http.RoundTripper
+	idle time.Duration
+}
+
+func (t *stallTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(r)
+	if err != nil || resp.Body == nil {
+		return resp, err
+	}
+	resp.Body = &stallReader{rc: resp.Body, idle: t.idle}
+	return resp, nil
+}
+
+// stallReader fails a read that has gone quiet for idle, by closing the body
+// from a timer (a blocked Read cannot be interrupted otherwise). Every byte
+// received rearms the timer.
+type stallReader struct {
+	rc    io.ReadCloser
+	idle  time.Duration
+	timer *time.Timer
+	mu    sync.Mutex
+	dead  bool
+}
+
+func (s *stallReader) Read(p []byte) (int, error) {
+	s.mu.Lock()
+	if s.timer == nil {
+		s.timer = time.AfterFunc(s.idle, func() {
+			s.mu.Lock()
+			s.dead = true
+			s.mu.Unlock()
+			s.rc.Close()
+		})
+	}
+	s.mu.Unlock()
+
+	n, err := s.rc.Read(p)
+	if n > 0 {
+		s.timer.Reset(s.idle)
+	}
+	if err != nil {
+		s.mu.Lock()
+		dead := s.dead
+		s.mu.Unlock()
+		if dead {
+			return n, fmt.Errorf("transfer stalled for %s: %w", s.idle, err)
+		}
+	}
+	return n, err
+}
+
+func (s *stallReader) Close() error {
+	s.mu.Lock()
+	if s.timer != nil {
+		s.timer.Stop()
+	}
+	s.mu.Unlock()
+	return s.rc.Close()
 }
