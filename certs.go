@@ -49,7 +49,10 @@ func NewHTTPClient() *http.Client {
 				DialContext:           (&net.Dialer{Timeout: 30 * time.Second}).DialContext,
 				TLSHandshakeTimeout:   30 * time.Second,
 				ResponseHeaderTimeout: 60 * time.Second,
-				ForceAttemptHTTP2:     true,
+				// HTTP/1.1 deliberately (a custom TLSClientConfig already opts
+				// out of automatic HTTP/2): forcing h2 made ghcr abort a ~1 GB
+				// blob mid-stream with "stream error … PROTOCOL_ERROR", and a
+				// bottle pull has nothing to gain from multiplexing.
 			},
 		},
 	}
