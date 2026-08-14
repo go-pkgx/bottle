@@ -3,12 +3,14 @@ package bottle
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
@@ -524,3 +526,83 @@ func TestSelectVersionsOrderIndependent(t *testing.T) {
 		t.Fatalf("duplicate plain tags → %+v", vs)
 	}
 }
+
+// TestStallGuard: a transfer that goes quiet is failed as STALLED, while a slow
+// but progressing one is left alone — the old whole-request 5-minute Timeout
+// killed the latter, which is how pulling llvm.org (~1 GB) died with "context
+// deadline exceeded".
+func TestStallGuard(t *testing.T) {
+	// no total deadline on the client any more
+	if c := NewHTTPClient(); c.Timeout != 0 {
+		t.Fatalf("client Timeout = %v, want none (stalls are guarded per-read)", c.Timeout)
+	}
+
+	t.Run("silence fails", func(t *testing.T) {
+		block := make(chan struct{})
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Length", "1024")
+			w.Write([]byte("start"))
+			w.(http.Flusher).Flush()
+			<-block // then say nothing at all
+		}))
+		defer func() { close(block); srv.Close() }()
+
+		old := stallTimeout
+		stallTimeout = 150 * time.Millisecond
+		defer func() { stallTimeout = old }()
+
+		resp, err := NewHTTPClient().Get(srv.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		_, err = io.ReadAll(resp.Body)
+		if err == nil || !strings.Contains(err.Error(), "stalled") {
+			t.Fatalf("read error = %v, want a stall", err)
+		}
+	})
+
+	t.Run("slow but progressing succeeds", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			for i := 0; i < 6; i++ { // keeps trickling, well past one idle window
+				w.Write([]byte("x"))
+				w.(http.Flusher).Flush()
+				time.Sleep(40 * time.Millisecond)
+			}
+		}))
+		defer srv.Close()
+
+		old := stallTimeout
+		stallTimeout = 150 * time.Millisecond
+		defer func() { stallTimeout = old }()
+
+		resp, err := NewHTTPClient().Get(srv.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, err := io.ReadAll(resp.Body)
+		if err != nil || string(b) != "xxxxxx" {
+			t.Fatalf("body = %q, err = %v", b, err)
+		}
+	})
+
+	t.Run("a bodyless response passes through", func(t *testing.T) {
+		tr := &stallTransport{idle: time.Second, base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: 204}, nil
+		})}
+		resp, err := tr.RoundTrip(&http.Request{})
+		if err != nil || resp.Body != nil {
+			t.Fatalf("resp = %+v, err = %v", resp, err)
+		}
+		// and a transport error propagates
+		tr.base = roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("boom") })
+		if _, err := tr.RoundTrip(&http.Request{}); err == nil {
+			t.Fatal("want the transport error")
+		}
+	})
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
