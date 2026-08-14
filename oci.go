@@ -265,7 +265,9 @@ func (c *OCIClient) Pull(project, ver, osn, arch string) ([]byte, string, error)
 		if ext == "" {
 			continue
 		}
-		data, err := orascontent.FetchAll(ctx, repo, l)
+		// Resumable: a toolchain bottle can be gigabytes and a cut transfer
+		// must not throw away what already arrived (see fetchblob.go).
+		data, err := c.fetchBlob(ctx, project, l)
 		if err != nil {
 			return nil, "", err
 		}
