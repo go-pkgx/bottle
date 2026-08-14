@@ -317,3 +317,56 @@ func TestOCIVersionsSkipFlavoredTags(t *testing.T) {
 		t.Fatalf("PickVersion = %q, %v", picked.Raw, err)
 	}
 }
+
+// TestOCIVersionsSkipReferrerTags: ghcr has no referrers API, so ORAS parks each
+// bottle's attestations under a `sha256-<digest>` TAG. Those must never be read
+// as versions — they inflated every listing with phantom "0" entries and, by
+// making the listing look non-empty, defeated the upstream fallback for a
+// project we had published only some versions of (measured live: gnu.org/gcc/
+// libstdcxx listed 14 "versions", 13 of them referrer tags).
+func TestOCIVersionsSkipReferrerTags(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	defer fr.close()
+	withDist(t, fr.base("go-pkgx/bottles"))
+	c, err := NewOCIClient(DistBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := c.repoName("gnu.org/gcc/libstdcxx")
+	for _, tag := range []string{
+		"16.2.0", "v15.1.0",
+		"sha256-5e3e8dd10513699116134fe1455e53db8d7d6b575a25d539bac524fc920c12b9",
+		"latest",
+	} {
+		fr.injectManifest(repo, tag, ocispec.MediaTypeImageManifest, []byte("{}"))
+	}
+	vs, err := VersionsFor("gnu.org/gcc/libstdcxx", "linux", "x86-64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw []string
+	for _, v := range vs {
+		raw = append(raw, v.Raw)
+	}
+	if strings.Join(raw, ",") != "15.1.0,16.2.0" {
+		t.Fatalf("versions = %v", raw)
+	}
+}
+
+func TestIsVersionTag(t *testing.T) {
+	for tag, want := range map[string]bool{
+		"1.2.3":         true,
+		"v5.8.3":        true,
+		"V2":            true,
+		"16.2.0":        true,
+		"sha256-abc123": false,
+		"latest":        false,
+		"main":          false,
+		"":              false,
+		"v":             false,
+	} {
+		if got := isVersionTag(tag); got != want {
+			t.Errorf("isVersionTag(%q) = %v, want %v", tag, got, want)
+		}
+	}
+}
