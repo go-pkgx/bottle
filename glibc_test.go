@@ -370,3 +370,62 @@ func TestIsVersionTag(t *testing.T) {
 		}
 	}
 }
+
+// TestVersionsForGhcrAnonymous403 covers the way ghcr reports a repository that
+// does not exist: an ANONYMOUS token request for it is DENIED with 403, never
+// 404. Read without credentials that means "we do not carry this package", so
+// version listing must fall back to the upstream dist — as it already does for
+// an empty listing. With credentials configured, a 403 is a real access problem
+// and must surface instead of silently changing where versions come from.
+func TestVersionsForGhcrAnonymous403(t *testing.T) {
+	up, hits := upstreamVersionsServer(t, "absent.org", "linux", "x86-64", []string{"1.0.0", "2.0.0"})
+
+	for _, tc := range []struct {
+		name       string
+		env        map[string]string
+		wantErr    bool
+		wantUpHits int
+		wantNewest string
+	}{
+		{name: "anonymous falls back", env: nil, wantUpHits: 1, wantNewest: "2.0.0"},
+		{name: "credentialed surfaces the denial", env: map[string]string{"OCI_USERNAME": "u", "OCI_PASSWORD": "p"}, wantErr: true},
+		{name: "token surfaces the denial", env: map[string]string{"OCI_TOKEN": "t"}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withGlibcEnv(t, tc.env)
+			fr := newFakeRegistry(t, false)
+			defer fr.close()
+			fr.hook = func(r *http.Request) (int, bool) {
+				if strings.Contains(r.URL.Path, "/tags/list") {
+					return 403, true // ghcr: "denied: requested access to the resource is denied"
+				}
+				return 0, false
+			}
+			oldUp := UpstreamDist
+			UpstreamDist = up
+			t.Cleanup(func() { UpstreamDist = oldUp })
+			withDist(t, fr.base("go-pkgx/packages"))
+
+			before := *hits
+			vs, err := VersionsFor("absent.org", "linux", "x86-64")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("want the 403 to surface, got %d versions", len(vs))
+				}
+				if *hits != before {
+					t.Fatal("upstream must not be consulted when credentials are configured")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("err = %v", err)
+			}
+			if *hits != before+tc.wantUpHits {
+				t.Fatalf("upstream hits = %d, want +%d", *hits-before, tc.wantUpHits)
+			}
+			if len(vs) == 0 || vs[len(vs)-1].Raw != tc.wantNewest {
+				t.Fatalf("versions = %v", vs)
+			}
+		})
+	}
+}
