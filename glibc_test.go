@@ -429,3 +429,98 @@ func TestVersionsForGhcrAnonymous403(t *testing.T) {
 		})
 	}
 }
+
+// TestFlavoredTagSelection: a host that pinned PKGX_GLIBC takes the build made
+// against THAT glibc — the `<version>-glibc<ver>` tag — while the version, the
+// constraint matching and the installed prefix all stay the plain version. Any
+// other flavor is never a candidate.
+func TestFlavoredTagSelection(t *testing.T) {
+	tags := []string{
+		"8.19.0",
+		"8.20.0",
+		"8.20.0-glibc2.27.0",
+		"8.20.0-glibc2.44.0",
+		"8.21.0-glibc2.44.0",
+		"sha256-deadbeef",
+	}
+	for _, tc := range []struct {
+		name   string
+		pin    string
+		want   string // "version@tag" list, oldest first
+		newest string
+		newTag string
+	}{
+		{
+			name:   "unpinned takes only plain builds",
+			pin:    "",
+			want:   "8.19.0@8.19.0,8.20.0@8.20.0",
+			newest: "8.20.0", newTag: "8.20.0",
+		},
+		{
+			name:   "pinned prefers its own flavor, keeps plain-only versions",
+			pin:    "2.27.0",
+			want:   "8.19.0@8.19.0,8.20.0@8.20.0-glibc2.27.0",
+			newest: "8.20.0", newTag: "8.20.0-glibc2.27.0",
+		},
+		{
+			name:   "a flavor-only version is reachable when pinned to it",
+			pin:    "2.44.0",
+			want:   "8.19.0@8.19.0,8.20.0@8.20.0-glibc2.44.0,8.21.0@8.21.0-glibc2.44.0",
+			newest: "8.21.0", newTag: "8.21.0-glibc2.44.0",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withGlibcEnv(t, map[string]string{"PKGX_GLIBC": tc.pin})
+			fr := newFakeRegistry(t, false)
+			defer fr.close()
+			withDist(t, fr.base("go-pkgx/bottles"))
+			c, err := NewOCIClient(DistBase)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, tag := range tags {
+				fr.injectManifest(c.repoName("curl.se"), tag, ocispec.MediaTypeImageManifest, []byte("{}"))
+			}
+			vs, err := VersionsFor("curl.se", "linux", "x86-64")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, v := range vs {
+				got = append(got, v.Raw+"@"+v.tag())
+			}
+			if strings.Join(got, ",") != tc.want {
+				t.Fatalf("versions = %v, want %v", got, tc.want)
+			}
+			// resolution by constraint still works on the plain version
+			picked, err := PickVersion("curl.se", "*")
+			if err != nil || picked.Raw != tc.newest || picked.tag() != tc.newTag {
+				t.Fatalf("PickVersion = %q (tag %q), %v", picked.Raw, picked.tag(), err)
+			}
+		})
+	}
+}
+
+func TestVerTagFallsBackToRaw(t *testing.T) {
+	if got := (Ver{Raw: "1.2.3"}).tag(); got != "1.2.3" {
+		t.Fatalf("tag() = %q", got)
+	}
+}
+
+// TestSelectVersionsOrderIndependent: the registry lists tags in whatever order
+// it likes (ghcr's listing is not sorted, and a fake registry's map order is
+// random), so the flavored-build preference must not depend on it.
+func TestSelectVersionsOrderIndependent(t *testing.T) {
+	plainFirst := []string{"8.20.0", "8.20.0-glibc2.27.0"}
+	flavorFirst := []string{"8.20.0-glibc2.27.0", "8.20.0"}
+	for _, tags := range [][]string{plainFirst, flavorFirst} {
+		vs := selectVersions(tags, "2.27.0")
+		if len(vs) != 1 || vs[0].Raw != "8.20.0" || vs[0].tag() != "8.20.0-glibc2.27.0" {
+			t.Fatalf("tags %v → %+v; the flavored build must win either way", tags, vs)
+		}
+	}
+	// duplicate plain tags collapse to one
+	if vs := selectVersions([]string{"1.0.0", "v1.0.0"}, ""); len(vs) != 1 {
+		t.Fatalf("duplicate plain tags → %+v", vs)
+	}
+}
