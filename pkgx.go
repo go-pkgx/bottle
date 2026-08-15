@@ -717,52 +717,11 @@ func fetchBottle(r Resolved, osn, arch string) (io.ReadCloser, bool, error) {
 	return nil, false, fmt.Errorf("no bottle for %s v%s (%s/%s)", r.Project, r.Version.Raw, osn, arch)
 }
 
+// untar unpacks a bottle stream into dest. It delegates to the shared Extract
+// (strip == 0), which restores file mtimes, rejects insecure paths with
+// ErrInsecurePath, and reproduces directories, files, symlinks and hard links.
 func untar(r io.Reader, dest string) error {
-	tr := tar.NewReader(r)
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dest, hdr.Name)
-		if !strings.HasPrefix(target, filepath.Clean(dest)+string(os.PathSeparator)) {
-			return fmt.Errorf("unsafe path in tar: %s", hdr.Name)
-		}
-		switch hdr.Typeflag {
-		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o755); err != nil {
-				return err
-			}
-		case tar.TypeSymlink:
-			_ = os.MkdirAll(filepath.Dir(target), 0o755)
-			_ = os.Remove(target)
-			if err := os.Symlink(hdr.Linkname, target); err != nil {
-				return err
-			}
-		case tar.TypeLink:
-			_ = os.MkdirAll(filepath.Dir(target), 0o755)
-			_ = os.Remove(target)
-			if err := os.Link(filepath.Join(dest, hdr.Linkname), target); err != nil {
-				return err
-			}
-		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return err
-			}
-			f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(hdr.Mode)&0o777)
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
-				return err
-			}
-			f.Close()
-		}
-	}
+	return Extract(tar.NewReader(r), dest, 0)
 }
 
 // writeVersionLinks creates v{maj}, v{maj}.{min} and v* -> v{full} symlinks
