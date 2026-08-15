@@ -367,6 +367,37 @@ func ociVersionsFor(project string) ([]Ver, error) {
 // DELIBERATELY — a host that pinned PKGX_GLIBC takes the build made against that
 // glibc, every other flavor is ignored, and the result is independent of the
 // order the registry happens to list tags in.
+// numericKey is a version's canonical numeric identity: "2.44" and "2.44.0"
+// share one, since cmpVer already treats them as the same version.
+func numericKey(v Ver) string {
+	n := len(v.Nums)
+	for n > 1 && v.Nums[n-1] == 0 {
+		n-- // trailing zeros carry no information
+	}
+	parts := make([]string, n)
+	for i := 0; i < n; i++ {
+		parts[i] = strconv.Itoa(v.Nums[i])
+	}
+	return strings.Join(parts, ".")
+}
+
+// supersedes reports whether candidate v should replace the one already kept for
+// the same numeric version: a flavored build always wins (it was asked for), and
+// otherwise the MORE SPECIFIC spelling does, so the choice never depends on the
+// order the registry happened to list its tags in.
+func supersedes(v, prev Ver, flavor string) bool {
+	if prev.Tag != "" {
+		return false // a flavored build is already held
+	}
+	if flavor != "" {
+		return true
+	}
+	if len(v.Nums) != len(prev.Nums) {
+		return len(v.Nums) > len(prev.Nums)
+	}
+	return v.Raw > prev.Raw
+}
+
 func selectVersions(tags []string, wantFlavor string) []Ver {
 	byVersion := map[string]Ver{}
 	for _, t := range tags {
@@ -377,15 +408,22 @@ func selectVersions(tags []string, wantFlavor string) []Ver {
 		if flavor != "" && flavor != wantFlavor {
 			continue // built against some other glibc: never ours
 		}
-		// Key on the PARSED version, so "1.0.0" and "v1.0.0" are one version.
+		// Key on the NUMERIC version, so "1.0.0", "v1.0.0" and "1.0" are one
+		// version. They compare equal, so leaving them as separate candidates
+		// makes the pick depend on the registry's listing order — and our own
+		// registry does carry both spellings (gnu.org/glibc has a 2.44 tag from a
+		// factory build and a 2.44.0 tag from the upstream mirror). A build then
+		// installed BOTH glibc trees side by side and linked against a sysroot
+		// that was not the one its loader came from.
 		v := ParseVer(ver)
-		if prev, ok := byVersion[v.Raw]; ok && (prev.Tag != "" || flavor == "") {
-			continue // the flavored build wins when both exist for a version
+		key := numericKey(v)
+		if prev, ok := byVersion[key]; ok && !supersedes(v, prev, flavor) {
+			continue
 		}
 		if flavor != "" {
 			v.Tag = t
 		}
-		byVersion[v.Raw] = v
+		byVersion[key] = v
 	}
 	vs := make([]Ver, 0, len(byVersion))
 	for _, v := range byVersion {
