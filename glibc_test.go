@@ -606,3 +606,41 @@ func TestStallGuard(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// TestSelectVersionsCollapsesEqualSpellings: "2.44" and "2.44.0" ARE the same
+// version (cmpVer says so), so keeping both makes the pick depend on the order
+// the registry lists its tags. Our own registry carries both for gnu.org/glibc —
+// a 2.44 tag from a factory build and a 2.44.0 tag from the upstream mirror —
+// and a build ended up with BOTH glibc trees installed, linking against a
+// sysroot that was not where its loader came from.
+func TestSelectVersionsCollapsesEqualSpellings(t *testing.T) {
+	for _, order := range [][]string{{"2.44", "2.44.0"}, {"2.44.0", "2.44"}} {
+		vs := selectVersions(order, "")
+		if len(vs) != 1 {
+			t.Fatalf("%v → %d candidates, want one", order, len(vs))
+		}
+		if vs[0].Raw != "2.44.0" {
+			t.Fatalf("%v → %q, want the more specific spelling either way", order, vs[0].Raw)
+		}
+	}
+	// a flavored build still wins over both spellings
+	vs := selectVersions([]string{"2.44", "2.44.0", "2.44-glibc2.27.0"}, "2.27.0")
+	if len(vs) != 1 || vs[0].tag() != "2.44-glibc2.27.0" {
+		t.Fatalf("→ %+v, want the flavored build", vs)
+	}
+	// distinct versions are untouched
+	if vs := selectVersions([]string{"1.0", "1.0.1", "2.0"}, ""); len(vs) != 3 {
+		t.Fatalf("→ %d candidates, want three", len(vs))
+	}
+}
+
+func TestNumericKey(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"2.44", "2.44"}, {"2.44.0", "2.44"}, {"2.44.0.0", "2.44"},
+		{"1.0.1", "1.0.1"}, {"0", "0"}, {"0.0", "0"},
+	} {
+		if got := numericKey(ParseVer(tc.in)); got != tc.want {
+			t.Errorf("numericKey(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
