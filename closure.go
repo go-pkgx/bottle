@@ -145,6 +145,17 @@ func implicitRoots(needed map[string]bool) map[string]string {
 	return roots
 }
 
+// isImplicitSoname reports whether a soname belongs to one of the implicit
+// system groups — glibc, the libstdc++/libgcc pair, the gcc runtime libs. Those
+// are the implicit block's business, and it installs them from their project
+// groups rather than from the soname map. The soname loop must not treat one as
+// unprovided: `provided` is sampled at the top of a round, BEFORE the implicit
+// install of that same round, so libstdc++.so.6 still looks missing there.
+func isImplicitSoname(soname string) bool {
+	one := map[string]bool{soname: true}
+	return matchesAny(one, glibcSonames) || matchesAny(one, libstdcxxSonames) || matchesAny(one, gccSonames)
+}
+
 // matchesAny reports whether any needed soname starts with one of the prefixes.
 func matchesAny(needed map[string]bool, prefixes []string) bool {
 	for soname := range needed {
@@ -248,7 +259,7 @@ func CompleteClosure(roots map[string]string, dir string) ([]Resolved, error) {
 		// libxml2.so.16, but a binary linked against libxml2.so.2 needs a 2.x
 		// bottle; likewise openssl 3 ships libssl.so.3, not libssl.so.1.1).
 		for soname := range needed {
-			if provided[soname] || triedSoname[soname] {
+			if provided[soname] || triedSoname[soname] || isImplicitSoname(soname) {
 				continue
 			}
 			// NB: do NOT skip when have[proj] — the provider may already be in
