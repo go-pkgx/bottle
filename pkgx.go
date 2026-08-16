@@ -479,17 +479,13 @@ func DownloadBottle(project, ver, osn, arch string) ([]byte, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-		if VerifyRequired() {
-			if err := c.VerifyBottle(project, ver, osn, arch, data); err != nil {
-				return nil, "", fmt.Errorf("verify %s v%s (%s/%s): %w", project, ver, osn, arch, err)
-			}
+		if err := verifyPulled(c, project, ver, osn, arch, data); err != nil {
+			return nil, "", err
 		}
 		return data, ext, nil
 	}
-	// The static-HTTP transport carries no signatures (referrers are OCI-only);
-	// if verification is demanded we cannot satisfy it, so fail closed.
-	if VerifyRequired() {
-		return nil, "", fmt.Errorf("signature verification is on by default but PKGX_DIST=%s (HTTP) has no signatures; use an oci:// dist or set PKGX_VERIFY=0", DistBase)
+	if err := httpDistUnverifiable(); err != nil {
+		return nil, "", err
 	}
 	base := fmt.Sprintf("%s/%s/%s/%s/v%s", DistBase, project, osn, arch, ver)
 	for _, ext := range []string{ExtTarGz, ExtTarXz} {
@@ -680,9 +676,36 @@ func Install(r Resolved, pkgxDir string) (bool, error) {
 	return true, nil
 }
 
+// verifyPulled enforces the fail-closed signature check on a pulled bottle.
+// EVERY path that brings bottle bytes onto the machine goes through it or
+// through httpDistUnverifiable — the install path used not to, so `pkgx` and
+// `pkgm` happily installed an unsigned bottle with PKGX_VERIFY=1 while only the
+// mirror tooling checked. A guarantee enforced on one path out of two is not a
+// guarantee.
+func verifyPulled(c *OCIClient, project, ver, osn, arch string, data []byte) error {
+	if !VerifyRequired() {
+		return nil
+	}
+	if err := c.VerifyBottle(project, ver, osn, arch, data); err != nil {
+		return fmt.Errorf("verify %s v%s (%s/%s): %w", project, ver, osn, arch, err)
+	}
+	return nil
+}
+
+// httpDistUnverifiable fails closed when verification is demanded but PKGX_DIST
+// speaks static HTTP, which carries no signatures at all (referrers are
+// OCI-only).
+func httpDistUnverifiable() error {
+	if !VerifyRequired() {
+		return nil
+	}
+	return fmt.Errorf("signature verification is on by default but PKGX_DIST=%s (HTTP) has no signatures; use an oci:// dist or set PKGX_VERIFY=0", DistBase)
+}
+
 // fetchBottle returns the compressed bottle stream, trying .tar.gz then .tar.xz.
-// When DistBase selects the OCI transport it pulls the bottle blob and wraps the
-// bytes in a reader, so Install (and thus pkgm/pkgx) works over OCI unchanged.
+// When DistBase selects the OCI transport it pulls the bottle blob, VERIFIES it
+// and wraps the bytes in a reader, so Install (and thus pkgm/pkgx) works over
+// OCI unchanged.
 func fetchBottle(r Resolved, osn, arch string) (io.ReadCloser, bool, error) {
 	if IsOCI(DistBase) {
 		c, err := ociClientForDist()
@@ -691,11 +714,18 @@ func fetchBottle(r Resolved, osn, arch string) (io.ReadCloser, bool, error) {
 		}
 		// The registry tag, which is the flavored one for a glibc-pinned build;
 		// the installed prefix stays v<version> either way.
-		data, ext, err := c.Pull(r.Project, r.Version.tag(), osn, arch)
+		tag := r.Version.tag()
+		data, ext, err := c.Pull(r.Project, tag, osn, arch)
 		if err != nil {
 			return nil, false, err
 		}
+		if err := verifyPulled(c, r.Project, tag, osn, arch, data); err != nil {
+			return nil, false, err
+		}
 		return io.NopCloser(bytes.NewReader(data)), ext == ExtTarXz, nil
+	}
+	if err := httpDistUnverifiable(); err != nil {
+		return nil, false, err
 	}
 	base := fmt.Sprintf("%s/%s/%s/%s/v%s", DistBase, r.Project, osn, arch, r.Version.Raw)
 	for _, ext := range []struct {

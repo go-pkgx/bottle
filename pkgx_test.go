@@ -171,6 +171,11 @@ func fakeServer(t *testing.T, pkgs map[string]fakePkg) func() {
 		}
 		http.NotFound(w, r)
 	})
+	// The fixture is a static-HTTP dist serving UNSIGNED bottles, so the
+	// fail-closed check refuses every install through it — correctly, now that
+	// the install path enforces it too. Tests that exercise verification itself
+	// set PKGX_VERIFY back on explicitly.
+	t.Setenv("PKGX_VERIFY", "0")
 	DistBase, PantryBase = srv.URL, srv.URL
 	return srv.Close
 }
@@ -449,6 +454,7 @@ func TestInstallBottleXZFallback(t *testing.T) {
 }
 
 func TestFetchBottleServerError(t *testing.T) {
+	t.Setenv("PKGX_VERIFY", "0") // status-code path: an HTTP dist is unverifiable by design
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", 500)
 	}))

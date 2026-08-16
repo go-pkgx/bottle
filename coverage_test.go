@@ -720,6 +720,7 @@ func ociXzBottle(t *testing.T, project, ver string, files map[string]string) []b
 }
 
 func TestInstallOverOCIGzAndXz(t *testing.T) {
+	t.Setenv("PKGX_VERIFY", "0") // transport round-trip on unsigned bottles
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
 	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
@@ -748,6 +749,9 @@ func TestInstallOverOCIGzAndXz(t *testing.T) {
 }
 
 func TestInstallOverOCIErrors(t *testing.T) {
+	// Decode/extract errors on unsigned fixtures: without the opt-out the
+	// fail-closed check refuses them first and none of these branches is reached.
+	t.Setenv("PKGX_VERIFY", "0")
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
 	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
@@ -834,6 +838,7 @@ func TestFetchBottleOCIClientError(t *testing.T) {
 }
 
 func TestFetchBottleHTTPGetError(t *testing.T) {
+	t.Setenv("PKGX_VERIFY", "0") // transport error path: an HTTP dist is unverifiable by design
 	withDist(t, "http://127.0.0.1:0")
 	if _, _, err := fetchBottle(Resolved{"a/b", ParseVer("1.0.0")}, "linux", "x86-64"); err == nil {
 		t.Error("expected HTTP GET (dial) error in fetchBottle")

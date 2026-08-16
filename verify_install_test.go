@@ -2,6 +2,7 @@ package bottle
 
 import (
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -206,5 +207,71 @@ func TestDownloadBottleVerifyHTTP(t *testing.T) {
 	if _, _, err := DownloadBottle("p", "1.0.0", "linux", "x86-64"); err == nil ||
 		!strings.Contains(err.Error(), "PKGX_VERIFY") {
 		t.Errorf("HTTP under PKGX_VERIFY should fail closed, got %v", err)
+	}
+}
+
+// TestInstallVerify pins the hole this file used to leave open: the guarantee
+// pkgx and pkgm advertise — "verifying each bottle's signature (fail-closed)" —
+// was enforced in DownloadBottle, which only the MIRROR tooling calls. Every
+// actual install went through fetchBottle, which checked nothing, so
+// `PKGX_VERIFY=1 pkgx +pkg` cheerfully installed an unsigned bottle. Measured on
+// a real registry before the fix.
+func TestInstallVerify(t *testing.T) {
+	// pushSignedBottle publishes for linux/x86-64; Install resolves for the host.
+	setGoos(t, "linux")
+	setGoarch(t, "x86-64")
+	fr := newFakeRegistry(t, false)
+	defer fr.close()
+	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	kp, err := sign.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldKey := SigningPublicKey
+	SigningPublicKey = kp.PublicKeyString()
+	defer func() { SigningPublicKey = oldKey }()
+
+	tarball := ociGzBottle(t, "inst.signed", "1.0.0", map[string]string{"bin/s": "x"})
+	pushSignedBottle(t, c, "inst.signed", kp, tarball, true)
+	unsigned := ociGzBottle(t, "inst.unsigned", "1.0.0", map[string]string{"bin/u": "x"})
+	pushSignedBottle(t, c, "inst.unsigned", kp, unsigned, false)
+
+	oldDist := DistBase
+	DistBase = fr.base("go-pkgx/bottles")
+	resetOCICache()
+	defer func() { DistBase = oldDist; resetOCICache() }()
+
+	t.Setenv("PKGX_VERIFY", "1")
+	// signed → installs
+	if fresh, err := Install(Resolved{"inst.signed", ParseVer("1.0.0")}, t.TempDir()); err != nil || !fresh {
+		t.Fatalf("signed install fresh=%v err=%v", fresh, err)
+	}
+	// unsigned → refused, and nothing is written
+	dir := t.TempDir()
+	if _, err := Install(Resolved{"inst.unsigned", ParseVer("1.0.0")}, dir); err == nil {
+		t.Error("an unsigned bottle installed under PKGX_VERIFY")
+	} else if !strings.Contains(err.Error(), "unsigned") {
+		t.Errorf("install error = %v, want it to name the missing signature", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "inst.unsigned")); err == nil {
+		t.Error("refused bottle left files behind")
+	}
+	// explicit opt-out → installs, as documented
+	t.Setenv("PKGX_VERIFY", "0")
+	if fresh, err := Install(Resolved{"inst.unsigned", ParseVer("1.0.0")}, t.TempDir()); err != nil || !fresh {
+		t.Errorf("opted-out install fresh=%v err=%v", fresh, err)
+	}
+}
+
+// TestInstallVerifyHTTP: a static-HTTP dist carries no signatures at all, so an
+// install through one must fail closed rather than silently skip the check.
+func TestInstallVerifyHTTP(t *testing.T) {
+	oldDist := DistBase
+	DistBase = "https://dist.example.test"
+	defer func() { DistBase = oldDist }()
+	t.Setenv("PKGX_VERIFY", "1")
+	if _, err := Install(Resolved{"p", ParseVer("1.0.0")}, t.TempDir()); err == nil ||
+		!strings.Contains(err.Error(), "PKGX_VERIFY") {
+		t.Errorf("HTTP install under PKGX_VERIFY should fail closed, got %v", err)
 	}
 }
