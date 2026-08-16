@@ -3,6 +3,7 @@ package bottle
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -181,6 +182,47 @@ func TestProjectForSonameAddedMappings(t *testing.T) {
 		if got := projectForSoname(in); got != want {
 			t.Errorf("projectForSoname(%q)=%q want %q", in, got, want)
 		}
+	}
+}
+
+// TestProvideSonameWarns pins each of the three ways the resolver gives up on a
+// soname. None of them fails the install, so the ONLY thing standing between
+// them and a runtime "cannot open shared object file" hours later is this
+// warning — perl's libcrypt.so.1 went missing exactly this way.
+func TestProvideSonameWarns(t *testing.T) {
+	defer fakeServer(t, map[string]fakePkg{
+		// zlib.net is published, but no version ships libz.so.1 in this fixture.
+		"zlib.net": {versions: []string{"1.3.2"}, yaml: "provides:\n  - bin/z\n", files: map[string]string{"bin/z": "x"}},
+	})()
+	var said []string
+	Warn = func(msg string) { said = append(said, msg) }
+	defer func() { Warn = nil }()
+
+	// 1. no project is mapped to the soname at all
+	if _, ok := provideSoname("libwhatever.so.9", t.TempDir()); ok {
+		t.Error("unmapped soname must not resolve")
+	}
+	// 2. the provider is mapped but the registry in use does not carry it
+	if _, ok := provideSoname("libcrypt.so.1", t.TempDir()); ok {
+		t.Error("absent provider must not resolve")
+	}
+	// 3. the provider is carried but no version ships that soname
+	if _, ok := provideSoname("libz.so.1", t.TempDir()); ok {
+		t.Error("soname absent from every version must not resolve")
+	}
+	for i, want := range []string{
+		"libwhatever.so.9 is NEEDED but no pkgx project is mapped to that soname",
+		"cannot provide libcrypt.so.1 from github.com/besser82/libxcrypt",
+		"no published zlib.net version provides libz.so.1",
+	} {
+		if i >= len(said) || !strings.Contains(said[i], want) {
+			t.Fatalf("warning %d = %q, want it to contain %q (all: %v)", i, said, want, said)
+		}
+	}
+	// A nil Warn is the library default and must stay silent, not panic.
+	Warn = nil
+	if _, ok := provideSoname("libwhatever.so.9", t.TempDir()); ok {
+		t.Error("unmapped soname must not resolve without a Warn either")
 	}
 }
 
