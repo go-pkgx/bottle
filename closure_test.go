@@ -246,3 +246,20 @@ func TestCompleteClosure(t *testing.T) {
 		t.Errorf("darwin closure = %d, want 1", len(closure))
 	}
 }
+
+// TestIsImplicitSoname pins the boundary between the two providers. The soname
+// loop samples `provided` at the top of a round, BEFORE the implicit block of
+// that same round installs glibc/libstdcxx — so without this test libstdc++.so.6
+// looks unprovided and the closure warns about a library it is installing.
+func TestIsImplicitSoname(t *testing.T) {
+	for _, s := range []string{"libc.so.6", "libm.so.6", "ld-linux-aarch64.so.1", "libstdc++.so.6", "libgcc_s.so.1", "libatomic.so.1"} {
+		if !isImplicitSoname(s) {
+			t.Errorf("%s belongs to an implicit group", s)
+		}
+	}
+	for _, s := range []string{"libz.so.1", "libcrypt.so.1", "libJIS.so"} {
+		if isImplicitSoname(s) {
+			t.Errorf("%s is NOT implicit — it must go through the soname map", s)
+		}
+	}
+}

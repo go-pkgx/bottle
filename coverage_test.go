@@ -1046,10 +1046,28 @@ func TestCompleteClosureLinuxFull(t *testing.T) {
 		"invisible-island.net/ncurses": {versions: []string{"6.5.0"}, yaml: "provides:\n  - bin/nc\n", files: map[string]string{"lib/libncurses.so.6": "x", "lib/libncursesw.so.6": "x"}},
 	})()
 
+	var said []string
+	Warn = func(msg string) { said = append(said, msg) }
+	defer func() { Warn = nil }()
+
 	dir := t.TempDir()
 	clo, err := CompleteClosure(map[string]string{"acme.org/tool": "*"}, dir)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// libc/libgcc_s/libstdc++/libgomp come from the IMPLICIT groups, which install
+	// AFTER `provided` is sampled — warning about them reports a gap the same
+	// round is closing, and a diagnostic that cries wolf is worse than none.
+	for _, msg := range said {
+		for _, implicit := range []string{"libc.so.6", "libgcc_s.so.1", "libstdc++.so.6", "libgomp.so.1"} {
+			if strings.Contains(msg, implicit) {
+				t.Errorf("warned about the implicitly-provided %s: %q", implicit, msg)
+			}
+		}
+	}
+	// openssl.org is genuinely not served by this fixture: THAT one must be said.
+	if len(said) != 1 || !strings.Contains(said[0], "libssl.so.3") {
+		t.Errorf("expected exactly the libssl.so.3 diagnostic, got %v", said)
 	}
 	have := map[string]bool{}
 	for _, r := range clo {
