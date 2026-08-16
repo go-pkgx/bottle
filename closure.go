@@ -251,20 +251,17 @@ func CompleteClosure(roots map[string]string, dir string) ([]Resolved, error) {
 			if provided[soname] || triedSoname[soname] {
 				continue
 			}
-			proj := projectForSoname(soname)
-			if proj == "" {
-				continue
-			}
 			// NB: do NOT skip when have[proj] — the provider may already be in
 			// the closure at a version that ships a DIFFERENT abi soname (e.g.
 			// libxml2 2.15 pulled as a declared dep ships libxml2.so.16, yet a
 			// binary needs libxml2.so.2). Pull the exact-soname version too;
 			// both lib dirs sit on LD_LIBRARY_PATH and each soname resolves.
-			triedSoname[soname] = true
-			r, ok, err := installProvidingSoname(proj, soname, dir)
-			if err != nil || !ok {
-				continue // no examined version provides it — give up on this soname
+			triedSoname[soname] = true // once per soname, so a warning is said once
+			r, ok := provideSoname(soname, dir)
+			if !ok {
+				continue
 			}
+			proj := r.Project
 			key := r.Project + "@" + r.Version.Raw
 			if installedVer[key] {
 				continue
@@ -280,6 +277,34 @@ func CompleteClosure(roots map[string]string, dir string) ([]Resolved, error) {
 		}
 	}
 	return closure, nil
+}
+
+// provideSoname installs the bottle that provides soname, or says why it could
+// not. ok=false means the closure stays INCOMPLETE — and an incomplete closure
+// does not fail here: it fails later, when the binary starts and reports
+// "<soname>: cannot open shared object file" with nothing pointing back at the
+// resolution that gave up. Each of the three ways to give up is distinct, and
+// distinguishing them is the whole point: an unmapped soname needs an entry in
+// sonameProject, a lookup error usually means the registry in use does not
+// carry the provider at all (perl's libcrypt.so.1 was simply absent from a
+// local cache, and the silence cost an hour), and "no version provides it"
+// means the provider moved past that ABI.
+func provideSoname(soname, dir string) (Resolved, bool) {
+	proj := projectForSoname(soname)
+	if proj == "" {
+		warn("%s is NEEDED but no pkgx project is mapped to that soname", soname)
+		return Resolved{}, false
+	}
+	r, ok, err := installProvidingSoname(proj, soname, dir)
+	switch {
+	case err != nil:
+		warn("cannot provide %s from %s: %v", soname, proj, err)
+		return Resolved{}, false
+	case !ok:
+		warn("no published %s version provides %s", proj, soname)
+		return Resolved{}, false
+	}
+	return r, true
 }
 
 // installProvidingSoname installs the newest available version of project whose
