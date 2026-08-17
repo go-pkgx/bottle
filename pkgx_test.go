@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	yaml "gopkg.in/yaml.v3"
 )
@@ -702,5 +703,67 @@ func TestFetchRuntimeEnvBadYAML(t *testing.T) {
 	})()
 	if _, err := FetchRuntimeEnv("bad.org", "/p", "1.0.0"); err == nil {
 		t.Error("expected a parse error")
+	}
+}
+
+// TestHTTPGetRetriesTransient: every recipe and every version listing is one GET
+// against raw.githubusercontent, which 503s under load. Two kernel builds in a
+// row died seven minutes in — after fetching and configuring a whole kernel — on
+// a single 503, because the GET was single-shot.
+func TestHTTPGetRetriesTransient(t *testing.T) {
+	old := sleep
+	sleep = func(time.Duration) {}
+	defer func() { sleep = old }()
+
+	var hits int
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		if hits < 3 {
+			http.Error(w, "later", http.StatusServiceUnavailable)
+			return
+		}
+		fmt.Fprint(w, "ok")
+	}))
+	defer s.Close()
+
+	body, err := httpGet(s.URL)
+	if err != nil || string(body) != "ok" {
+		t.Fatalf("body=%q err=%v; a transient 503 must be retried", body, err)
+	}
+	if hits != 3 {
+		t.Errorf("hits = %d, want 3 (two failures then success)", hits)
+	}
+
+	// A 404 is an ANSWER — "no such project" — and must not be retried.
+	hits = 0
+	s404 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		http.NotFound(w, nil)
+	}))
+	defer s404.Close()
+	if _, err := httpGet(s404.URL); err == nil {
+		t.Error("a 404 must still be an error")
+	}
+	if hits != 1 {
+		t.Errorf("404 attempted %d times, want 1", hits)
+	}
+
+	// A status that never recovers is reported after the attempts are spent.
+	hits = 0
+	s503 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		http.Error(w, "down", http.StatusServiceUnavailable)
+	}))
+	defer s503.Close()
+	if _, err := httpGet(s503.URL); err == nil {
+		t.Error("a permanent 503 must fail")
+	}
+	if hits != httpGetAttempts {
+		t.Errorf("attempted %d times, want %d", hits, httpGetAttempts)
+	}
+
+	// A transport error is retried too, and reported when it persists.
+	if _, err := httpGet("http://127.0.0.1:1/nope"); err == nil {
+		t.Error("a dead endpoint must fail")
 	}
 }

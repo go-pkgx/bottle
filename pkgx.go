@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ulikunitz/xz"
 	yaml "gopkg.in/yaml.v3"
@@ -247,16 +249,65 @@ func sameN(v, base Ver, n int) bool {
 
 // --- network ----------------------------------------------------------------
 
+// httpGetAttempts is how many times a transient failure is retried. Every
+// recipe and every version listing is one GET against raw.githubusercontent,
+// which 503s under load: two kernel builds in a row died seven minutes in on
+//
+//	GET …/projects/perl.org/package.yml: 503 first byte timeout
+//	GET …/projects/github.com/westes/flex/package.yml: 503 Service Unavailable
+//
+// after fetching and configuring a whole kernel. A single-shot GET makes the
+// build only as reliable as the flakiest CDN response in the closure.
+const httpGetAttempts = 4
+
+// httpRetryDelay is the base of the linear backoff between attempts.
+const httpRetryDelay = 250 * time.Millisecond
+
+// sleep is a seam: a test drives the retry loop without waiting for it.
+var sleep = time.Sleep
+
+// retriable reports whether a status is worth another attempt: the 5xx family
+// and 429, never a 404 (which means "this project has no such file" and is an
+// answer, not a hiccup).
+func retriable(status int) bool {
+	return status == http.StatusTooManyRequests || status >= 500
+}
+
+// httpGet fetches url, retrying a transport error or a transient status with a
+// short linear backoff.
 func httpGet(url string) ([]byte, error) {
+	var lastErr error
+	for attempt := 0; attempt < httpGetAttempts; attempt++ {
+		if attempt > 0 {
+			sleep(time.Duration(attempt) * httpRetryDelay)
+		}
+		body, status, err := httpGetOnce(url)
+		switch {
+		case err == nil && status == 200:
+			return body, nil
+		case err != nil:
+			lastErr = err
+		case retriable(status):
+			lastErr = fmt.Errorf("GET %s: %s", url, http.StatusText(status))
+		default:
+			return nil, fmt.Errorf("GET %s: %s", url, http.StatusText(status))
+		}
+	}
+	return nil, lastErr
+}
+
+// httpGetOnce is a single attempt: the body on success, the status either way.
+func httpGetOnce(url string) ([]byte, int, error) {
 	resp, err := HTTPClient.Get(url)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
+		return nil, resp.StatusCode, nil
 	}
-	return io.ReadAll(resp.Body)
+	b, err := io.ReadAll(resp.Body)
+	return b, resp.StatusCode, err
 }
 
 // FetchVersions returns the available versions of a project for the host
