@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -776,3 +777,72 @@ func writeVersionLinks(pkgxDir string, r Resolved) {
 		_ = os.Symlink(full, p)
 	}
 }
+
+// --- package.yml (runtime env) ----------------------------------------------
+
+// runtimeYML models the `runtime: env:` block a package uses to declare the
+// environment IT needs its consumers to have. It is not decoration: help2man
+// bundles the perl module Locale::gettext into its own prefix and publishes
+// PERL5LIB so the module is findable, and without that export help2man dies
+// with "Can't locate Locale/gettext.pm in @INC" — which is how gnu.org/libidn2
+// failed to build. Perl, Python, Ruby and Tcl module packages all work this way.
+type runtimeYML struct {
+	Runtime struct {
+		Env map[string]string `yaml:"env"`
+	} `yaml:"runtime"`
+}
+
+// FetchRuntimeEnv returns a project's runtime env declarations with the recipe
+// placeholders resolved against the version actually installed. A project that
+// declares none yields an empty map, not an error.
+func FetchRuntimeEnv(project, prefix, version string) (map[string]string, error) {
+	body, err := fetchRecipe(project)
+	if err != nil {
+		return nil, err
+	}
+	var y runtimeYML
+	if err := yaml.Unmarshal(body, &y); err != nil {
+		return nil, fmt.Errorf("%s/package.yml: %w", project, err)
+	}
+	out := make(map[string]string, len(y.Runtime.Env))
+	for k, v := range y.Runtime.Env {
+		out[k] = expandRecipeVars(v, prefix, version)
+	}
+	return out, nil
+}
+
+// expandRecipeVars resolves the moustache placeholders that can appear in a
+// runtime env value. Only the ones that mean something for an INSTALLED package
+// are handled — the prefix and the version — because a runtime env is read long
+// after the build, where {{hw.concurrency}} and friends have no meaning. A
+// placeholder left unresolved would end up verbatim in the environment, so an
+// unknown one is dropped rather than exported as literal moustaches.
+func expandRecipeVars(s, prefix, version string) string {
+	v := ParseVer(version)
+	rep := strings.NewReplacer(
+		"{{prefix}}", prefix,
+		"{{ prefix }}", prefix,
+		"{{version}}", version,
+		"{{ version }}", version,
+		"{{version.raw}}", version,
+		"{{ version.raw }}", version,
+		"{{version.major}}", verPart(v, 0),
+		"{{ version.major }}", verPart(v, 0),
+		"{{version.minor}}", verPart(v, 1),
+		"{{ version.minor }}", verPart(v, 1),
+		"{{version.marketing}}", verPart(v, 0)+"."+verPart(v, 1),
+		"{{ version.marketing }}", verPart(v, 0)+"."+verPart(v, 1),
+	)
+	return moustacheLeftovers.ReplaceAllString(rep.Replace(s), "")
+}
+
+// verPart returns the i-th numeric component of a version, or "0".
+func verPart(v Ver, i int) string {
+	if i < len(v.Nums) {
+		return strconv.Itoa(v.Nums[i])
+	}
+	return "0"
+}
+
+// moustacheLeftovers matches any placeholder expandRecipeVars does not know.
+var moustacheLeftovers = regexp.MustCompile(`\{\{[^}]*\}\}`)
