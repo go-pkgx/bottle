@@ -631,3 +631,76 @@ func TestApplyEnvOverlay(t *testing.T) {
 		t.Errorf("PantryOverlay = %q", PantryOverlay)
 	}
 }
+
+// TestFetchRuntimeEnv: a package declaring `runtime: env:` is declaring what its
+// CONSUMERS need. help2man bundles the perl module Locale::gettext into its own
+// prefix and publishes PERL5LIB so it is findable; without that export it dies
+// with "Can't locate Locale/gettext.pm in @INC", which is exactly how
+// gnu.org/libidn2 failed to build.
+func TestFetchRuntimeEnv(t *testing.T) {
+	defer fakeServer(t, map[string]fakePkg{
+		"gnu.org/help2man": {
+			versions: []string{"1.49.3"},
+			yaml: "runtime:\n  env:\n    PERL5LIB: \"{{prefix}}/lib/perl5:{{prefix}}/libexec/lib/perl5:$PERL5LIB\"\n" +
+				"    MAJOR: \"{{version.major}}.{{ version.minor }}\"\nprovides:\n  - bin/help2man\n",
+		},
+		"plain.org": {versions: []string{"1.0.0"}, yaml: "provides:\n  - bin/plain\n"},
+	})()
+
+	env, err := FetchRuntimeEnv("gnu.org/help2man", "/pkgx/gnu.org/help2man/v1.49.3", "1.49.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "/pkgx/gnu.org/help2man/v1.49.3/lib/perl5:/pkgx/gnu.org/help2man/v1.49.3/libexec/lib/perl5:$PERL5LIB"
+	if env["PERL5LIB"] != want {
+		t.Errorf("PERL5LIB = %q\nwant %q", env["PERL5LIB"], want)
+	}
+	// the shell reference survives expansion: the value chains onto whatever the
+	// caller already had, which is how two packages both contribute to one var.
+	if !strings.Contains(env["PERL5LIB"], "$PERL5LIB") {
+		t.Error("the $VAR chain must be preserved verbatim for the shell")
+	}
+	if env["MAJOR"] != "1.49" {
+		t.Errorf("version parts = %q, want 1.49", env["MAJOR"])
+	}
+	// a package with no runtime env yields an empty map, not an error
+	if env, err := FetchRuntimeEnv("plain.org", "/p", "1.0.0"); err != nil || len(env) != 0 {
+		t.Errorf("plain package: env=%v err=%v", env, err)
+	}
+	// an unserved project is an error
+	if _, err := FetchRuntimeEnv("absent.org", "/p", "1.0.0"); err == nil {
+		t.Error("expected an error for an unserved project")
+	}
+}
+
+func TestExpandRecipeVars(t *testing.T) {
+	for in, want := range map[string]string{
+		"{{prefix}}/lib":         "/p/lib",
+		"{{ prefix }}/lib":       "/p/lib",
+		"v{{version}}":           "v2.3.4",
+		"v{{ version.raw }}":     "v2.3.4",
+		"{{version.marketing}}":  "2.3",
+		"{{version.major}}":      "2",
+		"{{version.minor}}":      "3",
+		"a{{ hw.concurrency }}b": "ab", // unknown at install time: dropped, never literal
+		"nothing":                "nothing",
+	} {
+		if got := expandRecipeVars(in, "/p", "2.3.4"); got != want {
+			t.Errorf("expandRecipeVars(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// a version with fewer components still answers for the parts asked of it
+	if got := expandRecipeVars("{{version.minor}}", "/p", "7"); got != "0" {
+		t.Errorf("missing component = %q, want 0", got)
+	}
+}
+
+// A malformed recipe is an error, not silently no env.
+func TestFetchRuntimeEnvBadYAML(t *testing.T) {
+	defer fakeServer(t, map[string]fakePkg{
+		"bad.org": {versions: []string{"1.0.0"}, yaml: "runtime:\n  env: [this is not a map]\n"},
+	})()
+	if _, err := FetchRuntimeEnv("bad.org", "/p", "1.0.0"); err == nil {
+		t.Error("expected a parse error")
+	}
+}
