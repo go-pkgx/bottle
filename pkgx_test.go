@@ -767,3 +767,44 @@ func TestHTTPGetRetriesTransient(t *testing.T) {
 		t.Error("a dead endpoint must fail")
 	}
 }
+
+// TestInstallForTargetPlatform: a builder stages a rootfs for the platform it
+// is BUILDING, not the one it runs on — a linux/x86-64 image assembled from a
+// darwin/arm64 laptop must fetch the linux/x86-64 bottle.
+func TestInstallForTargetPlatform(t *testing.T) {
+	setGoos(t, "darwin")
+	setGoarch(t, "aarch64")
+	t.Setenv("PKGX_VERIFY", "0") // a bare HTTP fixture carries no signatures
+
+	tarball := makeBottleGz(t, "tool.org", "1.0.0", map[string]string{"bin/tool": "x"})
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = append(asked, r.URL.Path)
+		if strings.HasSuffix(r.URL.Path, "/linux/x86-64/v1.0.0.tar.gz") {
+			_, _ = w.Write(tarball)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	old := DistBase
+	DistBase = srv.URL
+	defer func() { DistBase = old }()
+
+	dir := t.TempDir()
+	if _, err := InstallFor(Resolved{"tool.org", ParseVer("1.0.0")}, dir, "linux", "x86-64"); err != nil {
+		t.Fatalf("InstallFor: %v", err)
+	}
+	for _, p := range asked {
+		if strings.Contains(p, "darwin") || strings.Contains(p, "aarch64") {
+			t.Errorf("asked the HOST platform: %s", p)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "tool.org", "v1.0.0", "bin", "tool")); err != nil {
+		t.Errorf("not extracted: %v", err)
+	}
+	// Install keeps meaning "the host": same fixture, and it must MISS.
+	if _, err := Install(Resolved{"other.org", ParseVer("1.0.0")}, t.TempDir()); err == nil {
+		t.Error("Install must still resolve for the host platform")
+	}
+}
