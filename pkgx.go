@@ -499,9 +499,19 @@ func isVersionTag(tag string) bool {
 	return s != "" && s[0] >= '0' && s[0] <= '9'
 }
 
-// PickVersion returns the highest available version satisfying constraint.
+// PickVersion returns the highest available version satisfying constraint,
+// among those published for the HOST platform.
 func PickVersion(project, constraint string) (Ver, error) {
-	vs, err := FetchVersions(project)
+	osn, arch := HostSlug()
+	return PickVersionFor(project, constraint, osn, arch)
+}
+
+// PickVersionFor is PickVersion for an EXPLICIT pkgx os/arch slug. A project's
+// published version sets differ per platform — a linux/aarch64 bottle can exist
+// where the darwin one does not — so a host that stages a rootfs for another
+// platform must resolve against that platform's catalogue, not its own.
+func PickVersionFor(project, constraint, osn, arch string) (Ver, error) {
+	vs, err := VersionsFor(project, osn, arch)
 	if err != nil {
 		return Ver{}, err
 	}
@@ -568,6 +578,16 @@ type pkgYML struct {
 // FetchMeta returns the host-relevant runtime dependencies (project ->
 // constraint) and the list of provided paths for a project's package.yml.
 func FetchMeta(project string) (deps map[string]string, provides []string, err error) {
+	osn, arch := HostSlug()
+	return FetchMetaFor(project, osn, arch)
+}
+
+// FetchMetaFor is FetchMeta for an EXPLICIT pkgx os/arch slug. A recipe's
+// dependencies are platform-keyed (`linux: {...}`, `darwin/aarch64: {...}`), so
+// reading them through the host's slug while staging a rootfs for another
+// platform silently produces the WRONG closure — a linux image missing the deps
+// only linux declares, and carrying the ones only darwin needs.
+func FetchMetaFor(project, osn, arch string) (deps map[string]string, provides []string, err error) {
 	body, err := fetchRecipe(project)
 	if err != nil {
 		return nil, nil, err
@@ -577,7 +597,6 @@ func FetchMeta(project string) (deps map[string]string, provides []string, err e
 		return nil, nil, fmt.Errorf("%s/package.yml: %w", project, err)
 	}
 	deps = map[string]string{}
-	osn, arch := HostSlug()
 	for k, node := range y.Dependencies {
 		if isPlatformKey(k) {
 			if platformMatches(k, osn, arch) {
@@ -632,6 +651,15 @@ type Resolved struct {
 
 // ResolveClosure walks the runtime dependency graph breadth-first.
 func ResolveClosure(roots map[string]string) ([]Resolved, error) {
+	osn, arch := HostSlug()
+	return ResolveClosureFor(roots, osn, arch)
+}
+
+// ResolveClosureFor is ResolveClosure for an EXPLICIT pkgx os/arch slug: the
+// whole walk — version pick and dependency read alike — happens in the target
+// platform's terms. This is what lets a darwin machine stage a complete
+// linux/aarch64 userland, which is how the sovereign builder image is built.
+func ResolveClosureFor(roots map[string]string, osn, arch string) ([]Resolved, error) {
 	seen := map[string]Ver{}
 	queue := []struct{ p, c string }{}
 	for p, c := range roots {
@@ -644,13 +672,13 @@ func ResolveClosure(roots map[string]string) ([]Resolved, error) {
 		if _, ok := seen[item.p]; ok {
 			continue
 		}
-		v, err := PickVersion(item.p, item.c)
+		v, err := PickVersionFor(item.p, item.c, osn, arch)
 		if err != nil {
 			return nil, err
 		}
 		seen[item.p] = v
 		order = append(order, item.p)
-		deps, _, err := FetchMeta(item.p)
+		deps, _, err := FetchMetaFor(item.p, osn, arch)
 		if err != nil {
 			return nil, err
 		}
