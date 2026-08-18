@@ -24,6 +24,8 @@ package bottle
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -245,12 +247,29 @@ func (c *OCIClient) ListTags(project string) ([]string, error) {
 	return tags, nil
 }
 
-// Pull downloads the bottle tarball for a project/version/os/arch: fetch the
-// version-tag manifest (an index, or a single-platform image manifest), pick the
-// platform-matching image manifest, take its single non-config layer, fetch the
-// layer blob. Returns the tarball bytes and the extension (".tar.gz"/".tar.xz")
-// derived from the layer mediaType.
+// Pull downloads the bottle tarball for a project/version/os/arch and returns
+// it in MEMORY. Prefer PullFile for anything bottle-sized: llvm.org is ~1.7 GiB
+// and this makes the biggest package in the catalogue the memory floor of the
+// caller. Kept for callers that genuinely want the bytes.
 func (c *OCIClient) Pull(project, ver, osn, arch string) ([]byte, string, error) {
+	f, ext, err := c.PullFile(project, ver, osn, arch)
+	if err != nil {
+		return nil, "", err
+	}
+	defer f.Close()
+	data, err := ioReadAll(f)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, ext, nil
+}
+
+// PullFile downloads the bottle tarball for a project/version/os/arch: fetch the
+// version-tag manifest (an index, or a single-platform image manifest), pick the
+// platform-matching image manifest, take its single non-config layer, stream the
+// layer blob TO DISK. Returns the staged file (Close removes it) and the
+// extension (".tar.gz"/".tar.xz") derived from the layer mediaType.
+func (c *OCIClient) PullFile(project, ver, osn, arch string) (*BlobFile, string, error) {
 	ctx := context.Background()
 	repo, err := c.repository(project)
 	if err != nil {
@@ -267,11 +286,11 @@ func (c *OCIClient) Pull(project, ver, osn, arch string) ([]byte, string, error)
 		}
 		// Resumable: a toolchain bottle can be gigabytes and a cut transfer
 		// must not throw away what already arrived (see fetchblob.go).
-		data, err := c.fetchBlob(ctx, project, l)
+		f, err := c.fetchBlobFile(ctx, project, l)
 		if err != nil {
 			return nil, "", err
 		}
-		return data, ext, nil
+		return f, ext, nil
 	}
 	return nil, "", fmt.Errorf("no bottle layer for %s v%s (%s/%s)", project, ver, osn, arch)
 }
@@ -326,6 +345,14 @@ func (c *OCIClient) resolvePlatform(ctx context.Context, repo *remote.Repository
 // missing signature referrer, a malformed one, or a signature that does not
 // verify (or does not commit to this tarball) all return an error.
 func (c *OCIClient) VerifyBottle(project, ver, osn, arch string, tarball []byte) error {
+	sum := sha256.Sum256(tarball)
+	return c.VerifyBottleDigest(project, ver, osn, arch, "sha256:"+hex.EncodeToString(sum[:]))
+}
+
+// VerifyBottleDigest is VerifyBottle for a bottle identified by its DIGEST: the
+// form an install uses, having streamed the tarball to disk and hashed it on
+// the way past.
+func (c *OCIClient) VerifyBottleDigest(project, ver, osn, arch, digest string) error {
 	ctx := context.Background()
 	repo, err := c.repository(project)
 	if err != nil {
@@ -368,7 +395,7 @@ func (c *OCIClient) VerifyBottle(project, ver, osn, arch string, tarball []byte)
 	if err != nil {
 		return err
 	}
-	return VerifySignature(tarball, payload, b64, "")
+	return VerifySignatureDigest(digest, payload, b64, "")
 }
 
 // isIndexMedia reports whether a manifest is an image index, by descriptor
