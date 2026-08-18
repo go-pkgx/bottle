@@ -45,6 +45,10 @@ import (
 const (
 	MediaBottleLayerGz = "application/vnd.pkgx.bottle.layer.v1.tar+gzip"
 	MediaBottleLayerXz = "application/vnd.pkgx.bottle.layer.v1.tar+xz"
+	// +zstd is a media type the OCI image-spec itself defines (unlike, say,
+	// brotli, which has none and would make every generic tool — skopeo, oras,
+	// registry UIs — treat the layer as opaque).
+	MediaBottleLayerZst = "application/vnd.pkgx.bottle.layer.v1.tar+zstd"
 	// ArtifactTypeBottle marks a pkgx-bottle image manifest (its manifest.config
 	// carries this via ORAS PackManifest v1.1's artifactType).
 	ArtifactTypeBottle = "application/vnd.pkgx.bottle"
@@ -90,6 +94,14 @@ func extForLayer(mt string) string {
 		return ExtTarGz
 	case strings.HasSuffix(mt, "tar+xz"):
 		return ExtTarXz
+	case strings.HasSuffix(mt, "tar+zstd"):
+		return ExtTarZst
+	// Loose matches for media types that name the codec without the +form.
+	// zstd FIRST: it is the only one of the three whose name contains another's
+	// ("zstd" has no "xz", but a future "tar.zstd" must not fall through to a
+	// substring rule written for something else).
+	case strings.Contains(mt, "zstd"):
+		return ExtTarZst
 	case strings.Contains(mt, "gzip"):
 		return ExtTarGz
 	case strings.Contains(mt, "xz"):
@@ -467,9 +479,14 @@ func (c *OCIClient) push(project, ver, osn, arch string, tarball []byte, ext str
 	if err != nil {
 		return ocispec.Descriptor{}, err
 	}
+	// The extension is the source of truth for the codec; the media type is how
+	// a puller learns it without sniffing bytes.
 	layerMedia := MediaBottleLayerGz
-	if ext == ExtTarXz {
+	switch ext {
+	case ExtTarXz:
 		layerMedia = MediaBottleLayerXz
+	case ExtTarZst:
+		layerMedia = MediaBottleLayerZst
 	}
 	layerDesc := orascontent.NewDescriptorFromBytes(layerMedia, tarball)
 	if err := pushIfAbsent(ctx, repo, layerDesc, tarball); err != nil {
@@ -515,7 +532,8 @@ func (c *OCIClient) push(project, ver, osn, arch string, tarball []byte, ext str
 var (
 	indexRetryAttempts = 6
 	indexRetryBackoff  = func(attempt int) { time.Sleep(time.Duration(attempt) * 20 * time.Millisecond) }
-	indexSettle        = func() { time.Sleep(2 * time.Second) }
+	indexSettleDelay   = 2 * time.Second
+	indexSettle        = func() { time.Sleep(indexSettleDelay) }
 	afterTagHook       func()
 )
 

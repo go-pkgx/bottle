@@ -2,7 +2,6 @@ package bottle
 
 import (
 	"archive/tar"
-	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -17,7 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ulikunitz/xz"
 	yaml "gopkg.in/yaml.v3"
 )
 
@@ -718,27 +716,16 @@ func InstallFor(r Resolved, pkgxDir, osn, arch string) (bool, error) {
 	if st, err := os.Stat(prefix); err == nil && st.IsDir() {
 		return false, nil // already present
 	}
-	// Prefer gzip (stdlib); fall back to xz for bottles published xz-only.
-	body, isXz, err := fetchBottle(r, osn, arch)
+	body, ext, err := fetchBottle(r, osn, arch)
 	if err != nil {
 		return false, err
 	}
 	defer body.Close()
-	var dec io.Reader = body
-	if isXz {
-		xr, err := xz.NewReader(body)
-		if err != nil {
-			return false, err
-		}
-		dec = xr
-	} else {
-		gz, err := gzip.NewReader(body)
-		if err != nil {
-			return false, err
-		}
-		defer gz.Close()
-		dec = gz
+	dec, closeDec, err := decompressor(ext, body)
+	if err != nil {
+		return false, err
 	}
+	defer closeDec()
 	// Unpack into a private temp dir, then atomically rename the extracted
 	// <project>/v<ver> into place.
 	if err := os.MkdirAll(pkgxDir, 0o755); err != nil {
@@ -803,11 +790,14 @@ func httpDistUnverifiable() error {
 // When DistBase selects the OCI transport it pulls the bottle blob, VERIFIES it
 // and wraps the bytes in a reader, so Install (and thus pkgm/pkgx) works over
 // OCI unchanged.
-func fetchBottle(r Resolved, osn, arch string) (io.ReadCloser, bool, error) {
+// fetchBottle returns the bottle body and the EXTENSION that names its
+// compression — a string rather than the old isXz bool, because there are now
+// three codecs and a boolean cannot say which.
+func fetchBottle(r Resolved, osn, arch string) (io.ReadCloser, string, error) {
 	if IsOCI(DistBase) {
 		c, err := ociClientForDist()
 		if err != nil {
-			return nil, false, err
+			return nil, "", err
 		}
 		// The registry tag, which is the flavored one for a glibc-pinned build;
 		// the installed prefix stays v<version> either way.
@@ -819,35 +809,33 @@ func fetchBottle(r Resolved, osn, arch string) (io.ReadCloser, bool, error) {
 		// checked against — so the tarball is never read twice either.
 		f, ext, err := c.PullFile(r.Project, tag, osn, arch)
 		if err != nil {
-			return nil, false, err
+			return nil, "", err
 		}
 		if err := verifyPulledDigest(c, r.Project, tag, osn, arch, f.Digest); err != nil {
 			f.Close()
-			return nil, false, err
+			return nil, "", err
 		}
-		return f, ext == ExtTarXz, nil
+		return f, ext, nil
 	}
 	if err := httpDistUnverifiable(); err != nil {
-		return nil, false, err
+		return nil, "", err
 	}
 	base := fmt.Sprintf("%s/%s/%s/%s/v%s", DistBase, r.Project, osn, arch, r.Version.Raw)
-	for _, ext := range []struct {
-		suffix string
-		xz     bool
-	}{{ExtTarGz, false}, {ExtTarXz, true}} {
-		resp, err := HTTPClient.Get(base + ext.suffix)
+	// Newest codec first: a dist that carries both serves the cheaper install.
+	for _, ext := range []string{ExtTarZst, ExtTarGz, ExtTarXz} {
+		resp, err := HTTPClient.Get(base + ext)
 		if err != nil {
-			return nil, false, err
+			return nil, "", err
 		}
 		if resp.StatusCode == 200 {
-			return resp.Body, ext.xz, nil
+			return resp.Body, ext, nil
 		}
 		resp.Body.Close()
 		if resp.StatusCode != 404 {
-			return nil, false, fmt.Errorf("GET %s: %s", base+ext.suffix, resp.Status)
+			return nil, "", fmt.Errorf("GET %s: %s", base+ext, resp.Status)
 		}
 	}
-	return nil, false, fmt.Errorf("no bottle for %s v%s (%s/%s)", r.Project, r.Version.Raw, osn, arch)
+	return nil, "", fmt.Errorf("no bottle for %s v%s (%s/%s)", r.Project, r.Version.Raw, osn, arch)
 }
 
 // untar unpacks a bottle stream into dest. It delegates to the shared Extract
