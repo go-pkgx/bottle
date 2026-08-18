@@ -674,12 +674,21 @@ func ResolveClosure(roots map[string]string) ([]Resolved, error) {
 // Extraction is atomic — the bottle is unpacked into a temp dir and the
 // versioned prefix is renamed into place — so concurrent installs sharing one
 // PKGX_DIR never observe a half-extracted prefix.
+// Install materialises a bottle for the HOST platform. Use InstallFor to stage
+// a rootfs for another one -- building a linux image from a mac, say.
 func Install(r Resolved, pkgxDir string) (bool, error) {
+	osn, arch := HostSlug()
+	return InstallFor(r, pkgxDir, osn, arch)
+}
+
+// InstallFor materialises a bottle for an EXPLICIT platform. The extracted tree
+// is identical whatever the host: only the bottle fetched differs, so a builder
+// can stage a linux/aarch64 rootfs from a darwin/arm64 machine.
+func InstallFor(r Resolved, pkgxDir, osn, arch string) (bool, error) {
 	prefix := filepath.Join(pkgxDir, r.Project, "v"+r.Version.Raw)
 	if st, err := os.Stat(prefix); err == nil && st.IsDir() {
 		return false, nil // already present
 	}
-	osn, arch := HostSlug()
 	// Prefer gzip (stdlib); fall back to xz for bottles published xz-only.
 	body, isXz, err := fetchBottle(r, osn, arch)
 	if err != nil {
