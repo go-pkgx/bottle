@@ -23,8 +23,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ulikunitz/xz"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"github.com/ulikunitz/xz"
 	oras "oras.land/oras-go/v2"
 	orascontent "oras.land/oras-go/v2/content"
 )
@@ -114,10 +114,10 @@ func buildELF(needed []string, dynLink uint32) []byte {
 		le.PutUint64(b[56:], entsize)
 		return b
 	}
-	buf.Write(sh(0, 0, 0, 0, 0, 0, 0))                                    // SHT_NULL
-	buf.Write(sh(nDynstr, 3, dynstrOff, uint64(dynstr.Len()), 0, 1, 0))   // .dynstr
+	buf.Write(sh(0, 0, 0, 0, 0, 0, 0))                                        // SHT_NULL
+	buf.Write(sh(nDynstr, 3, dynstrOff, uint64(dynstr.Len()), 0, 1, 0))       // .dynstr
 	buf.Write(sh(nDynamic, 6, dynamicOff, uint64(dyn.Len()), dynLink, 8, 16)) // .dynamic -> link .dynstr
-	buf.Write(sh(nShstr, 3, shstrOff, uint64(shstr.Len()), 0, 1, 0))      // .shstrtab
+	buf.Write(sh(nShstr, 3, shstrOff, uint64(shstr.Len()), 0, 1, 0))          // .shstrtab
 	return buf.Bytes()
 }
 
@@ -261,6 +261,10 @@ func TestFindLoaderUnmappedArch(t *testing.T) {
 }
 
 func TestSetupScratchRootfs(t *testing.T) {
+	// Pin a mapped arch instead of trusting the host to have one: on
+	// GOARCH=wasm LoaderName() is "" and the loop under test never runs, so
+	// this asserted nothing there and failed on the symlink it expected.
+	setGoarch(t, "aarch64")
 	dir := t.TempDir()
 	oldDirs := loaderDirs
 	loaderDirs = []string{filepath.Join(dir, "lib"), filepath.Join(dir, "lib64")}
@@ -282,6 +286,9 @@ func TestSetupScratchRootfs(t *testing.T) {
 }
 
 func TestCanonicalLoaderExists(t *testing.T) {
+	// Same reason as TestSetupScratchRootfs: with LoaderName() == "" the file
+	// this writes is the DIRECTORY, and the assertion becomes nonsense.
+	setGoarch(t, "aarch64")
 	dir := t.TempDir()
 	oldDirs := loaderDirs
 	loaderDirs = []string{filepath.Join(dir, "lib"), filepath.Join(dir, "lib64")}
@@ -649,11 +656,11 @@ func TestFetchMetaErrors(t *testing.T) {
 func TestResolveClosureBranches(t *testing.T) {
 	// A diamond (root -> b, c ; b -> d ; c -> d) exercises the already-seen skip.
 	defer fakeServer(t, map[string]fakePkg{
-		"a/root": {versions: []string{"1.0.0"}, yaml: "dependencies:\n  b/x: '*'\n  c/x: '*'\nprovides:\n  - bin/root\n"},
-		"b/x":    {versions: []string{"1.0.0"}, yaml: "dependencies:\n  d/x: '*'\nprovides:\n  - bin/b\n"},
-		"c/x":    {versions: []string{"1.0.0"}, yaml: "dependencies:\n  d/x: '*'\nprovides:\n  - bin/c\n"},
-		"d/x":    {versions: []string{"1.0.0"}, yaml: "provides:\n  - bin/d\n"},
-		"bad/ver": {versions: []string{"1.0.0"}, yaml: "provides:\n  - bin/x\n"},
+		"a/root":   {versions: []string{"1.0.0"}, yaml: "dependencies:\n  b/x: '*'\n  c/x: '*'\nprovides:\n  - bin/root\n"},
+		"b/x":      {versions: []string{"1.0.0"}, yaml: "dependencies:\n  d/x: '*'\nprovides:\n  - bin/b\n"},
+		"c/x":      {versions: []string{"1.0.0"}, yaml: "dependencies:\n  d/x: '*'\nprovides:\n  - bin/c\n"},
+		"d/x":      {versions: []string{"1.0.0"}, yaml: "provides:\n  - bin/d\n"},
+		"bad/ver":  {versions: []string{"1.0.0"}, yaml: "provides:\n  - bin/x\n"},
 		"bad/yaml": {versions: []string{"1.0.0"}, yaml: "dependencies:\n\tnope\n"},
 	})()
 	clo, err := ResolveClosure(map[string]string{"a/root": "*"})
