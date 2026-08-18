@@ -94,19 +94,63 @@ func PrefixOf(project string, closure []Resolved, dir string) string {
 	return ""
 }
 
+// Stage describes where a closure's bottles LIVE while stubs are written and
+// where they will live when the stubs RUN. The two differ whenever a rootfs is
+// assembled somewhere other than the machine that will boot it — the whole
+// point of staging.
+type Stage struct {
+	// Dir is where the bottles are on the machine writing the stubs. Files are
+	// checked for existence here.
+	Dir string
+	// GuestDir is the path those same bottles will have where the stubs run —
+	// "/pkgx" for an image staged under /tmp/rootfs. Empty means Dir: the
+	// staging machine IS the running machine (pkgm's case).
+	GuestDir string
+	// Prefix is where <prefix>/bin receives the stubs, on the staging machine.
+	Prefix string
+	// OS and Arch are the pkgx slug of the target. Empty means the host's —
+	// they select which platform's `provides:` list names the binaries.
+	OS, Arch string
+}
+
 // StubBins writes a small env-setting shell stub into <prefix>/bin for every
 // binary in the closure, mirroring the reference pkgm: the stub exports the
 // closure's LD_LIBRARY_PATH and exec's the real bottle binary.
 func StubBins(closure []Resolved, dir, prefix string) (int, error) {
+	return StubBinsStaged(closure, Stage{Dir: dir, Prefix: prefix})
+}
+
+// StubBinsStaged is StubBins for a rootfs being assembled elsewhere.
+//
+// A stub is a shell script holding ABSOLUTE paths — the closure's
+// LD_LIBRARY_PATH and the bottle binary to exec. Written with the staging
+// machine's paths, every one of them is wrong the moment the rootfs boots:
+// they point at /tmp/whatever-the-builder-used, a directory the guest does not
+// have. So the paths baked in come from GuestDir while the existence checks
+// use Dir.
+func StubBinsStaged(closure []Resolved, s Stage) (int, error) {
+	dir, prefix := s.Dir, s.Prefix
+	guestDir := s.GuestDir
+	if guestDir == "" {
+		guestDir = dir
+	}
+	osn, arch := s.OS, s.Arch
+	if osn == "" || arch == "" {
+		osn, arch = HostSlug()
+	}
 	binDir := filepath.Join(prefix, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
 		return 0, err
 	}
 	libPath := LibPath(closure, dir)
+	if guestDir != dir {
+		libPath = strings.ReplaceAll(libPath, dir, guestDir)
+	}
 	n := 0
 	for _, r := range closure {
 		pkgPrefix := filepath.Join(dir, r.Project, "v"+r.Version.Raw)
-		_, provides, err := FetchMeta(r.Project)
+		guestPrefix := filepath.Join(guestDir, r.Project, "v"+r.Version.Raw)
+		_, provides, err := FetchMetaFor(r.Project, osn, arch)
 		if err != nil {
 			continue
 		}
@@ -115,7 +159,8 @@ func StubBins(closure []Resolved, dir, prefix string) (int, error) {
 			if _, err := os.Stat(real); err != nil {
 				continue
 			}
-			stub := fmt.Sprintf("#!/bin/sh\nexport LD_LIBRARY_PATH=\"%s${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\"\nexec \"%s\" \"$@\"\n", libPath, real)
+			stub := fmt.Sprintf("#!/bin/sh\nexport LD_LIBRARY_PATH=\"%s${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\"\nexec \"%s\" \"$@\"\n",
+				libPath, filepath.Join(guestPrefix, "bin", name))
 			dst := filepath.Join(binDir, name)
 			_ = os.Remove(dst)
 			if err := os.WriteFile(dst, []byte(stub), 0o755); err != nil {
@@ -160,7 +205,14 @@ func LoaderName() string { return LoaderNameFor(goarch()) }
 
 // FindLoader locates the pkgx glibc dynamic loader in an installed closure.
 func FindLoader(dir string) string {
-	name := LoaderName()
+	return FindLoaderFor(dir, goarch())
+}
+
+// FindLoaderFor is FindLoader for an EXPLICIT architecture: the loader of the
+// rootfs being STAGED, whose ELF name (ld-linux-aarch64.so.1 vs
+// ld-linux-x86-64.so.2) is the target's, not the staging machine's.
+func FindLoaderFor(dir, arch string) string {
+	name := LoaderNameFor(arch)
 	if name == "" {
 		return ""
 	}
