@@ -32,6 +32,12 @@ jobs:
             goarch: riscv64
           - goos: linux
             goarch: ppc64le
+          # wasm is a real target for this package, not a curiosity: a browser
+          # that installs a signed bottle into its own store runs THIS code.
+          - goos: js
+            goarch: wasm
+          - goos: wasip1
+            goarch: wasm
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -44,3 +50,26 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: go build ./...
+
+  wasm:
+    name: test (js/wasm, node)
+    runs-on: ubuntu-latest
+    # Building for js/wasm proves the package COMPILES there; it says nothing
+    # about whether it WORKS. Go's js/wasm net/http goes through the host's
+    # fetch(), its filesystem through the host's fs — two different runtimes
+    # from the ones every other lane exercises. So run the suite, in node.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: go test (js/wasm)
+        env:
+          GOOS: js
+          GOARCH: wasm
+        run: |
+          echo "$(go env GOROOT)/lib/wasm" >> "$GITHUB_PATH"
+          PATH="$PATH:$(go env GOROOT)/lib/wasm" go test -count=1 ./...
