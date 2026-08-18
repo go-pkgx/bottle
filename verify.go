@@ -54,6 +54,16 @@ const (
 // (docker-manifest-digest == sha256(tarball)). Every failure returns an error —
 // callers treat that as fail-closed.
 func VerifySignature(tarball, payload []byte, b64sig, pubkey string) error {
+	sum := sha256.Sum256(tarball)
+	return VerifySignatureDigest("sha256:"+hex.EncodeToString(sum[:]), payload, b64sig, pubkey)
+}
+
+// VerifySignatureDigest is VerifySignature for a tarball identified by its
+// DIGEST rather than by its bytes. The bytes are only ever hashed here, so a
+// caller that streamed the bottle to disk — computing the digest on the way —
+// can verify the signature without reading the tarball back, let alone holding
+// it in memory.
+func VerifySignatureDigest(digest string, payload []byte, b64sig, pubkey string) error {
 	if pubkey == "" {
 		pubkey = SigningPublicKey
 	}
@@ -74,8 +84,7 @@ func VerifySignature(tarball, payload []byte, b64sig, pubkey string) error {
 	if err := json.Unmarshal(payload, &p); err != nil {
 		return fmt.Errorf("bottle: bad signing payload: %w", err)
 	}
-	sum := sha256.Sum256(tarball)
-	if want := "sha256:" + hex.EncodeToString(sum[:]); p.Critical.Image.Digest != want {
+	if p.Critical.Image.Digest != digest {
 		return errors.New("bottle: signature does not match this bottle")
 	}
 	return nil

@@ -2,8 +2,9 @@ package bottle
 
 import (
 	"archive/tar"
-	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -772,10 +773,17 @@ func InstallFor(r Resolved, pkgxDir, osn, arch string) (bool, error) {
 // mirror tooling checked. A guarantee enforced on one path out of two is not a
 // guarantee.
 func verifyPulled(c *OCIClient, project, ver, osn, arch string, data []byte) error {
+	sum := sha256.Sum256(data)
+	return verifyPulledDigest(c, project, ver, osn, arch, "sha256:"+hex.EncodeToString(sum[:]))
+}
+
+// verifyPulledDigest is verifyPulled for a bottle already staged on disk, whose
+// digest was computed as it was written.
+func verifyPulledDigest(c *OCIClient, project, ver, osn, arch, digest string) error {
 	if !VerifyRequired() {
 		return nil
 	}
-	if err := c.VerifyBottle(project, ver, osn, arch, data); err != nil {
+	if err := c.VerifyBottleDigest(project, ver, osn, arch, digest); err != nil {
 		return fmt.Errorf("verify %s v%s (%s/%s): %w", project, ver, osn, arch, err)
 	}
 	return nil
@@ -804,14 +812,20 @@ func fetchBottle(r Resolved, osn, arch string) (io.ReadCloser, bool, error) {
 		// The registry tag, which is the flavored one for a glibc-pinned build;
 		// the installed prefix stays v<version> either way.
 		tag := r.Version.tag()
-		data, ext, err := c.Pull(r.Project, tag, osn, arch)
+		// Streamed to DISK, not into a []byte: llvm.org is ~1.7 GiB and making
+		// the biggest bottle the memory floor of every install is what killed a
+		// 2 GiB micro-VM mid-build. The file is removed when the caller closes
+		// it, and the digest computed on the way past is what the signature is
+		// checked against — so the tarball is never read twice either.
+		f, ext, err := c.PullFile(r.Project, tag, osn, arch)
 		if err != nil {
 			return nil, false, err
 		}
-		if err := verifyPulled(c, r.Project, tag, osn, arch, data); err != nil {
+		if err := verifyPulledDigest(c, r.Project, tag, osn, arch, f.Digest); err != nil {
+			f.Close()
 			return nil, false, err
 		}
-		return io.NopCloser(bytes.NewReader(data)), ext == ExtTarXz, nil
+		return f, ext == ExtTarXz, nil
 	}
 	if err := httpDistUnverifiable(); err != nil {
 		return nil, false, err

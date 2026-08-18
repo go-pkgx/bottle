@@ -166,7 +166,7 @@ func TestFetchBlobGivesUp(t *testing.T) {
 
 	t.Run("unusable request", func(t *testing.T) {
 		c, desc, _ := blobClient(t, httptest.NewServer(http.NotFoundHandler()))
-		if _, err := c.appendBlobFrom(context.Background(), "://bad url", 0, &[]byte{}); err == nil {
+		if _, _, err := c.writeBlobFrom(context.Background(), "://bad url", 0, nil); err == nil {
 			t.Fatal("want a request-construction error")
 		}
 		if _, err := c.fetchBlob(context.Background(), "lib.org\n", desc); err == nil {
