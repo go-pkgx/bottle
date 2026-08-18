@@ -792,3 +792,56 @@ func TestOCIHasPlatform(t *testing.T) {
 		t.Error("closed registry should surface a transport error")
 	}
 }
+
+// TestOCIIndexSurvivesALateClobber is the failure that actually happened, in
+// miniature: the racer's write lands AFTER our verify, not before it.
+//
+// python.org 3.14.7 was mirrored by the two arch jobs 350 ms apart and the
+// published index listed only amd64 — the arm64 bottle was pushed, its manifest
+// was fine, and every arm64 install then failed with "platform not in index".
+// The loop had already confirmed arm64 was present; the clobber came later,
+// from a writer whose read predated it.
+//
+// Here the clobber fires from the settle window, so the first verify passes and
+// only the second catches it. The reconcile must then put the platform back —
+// and keep the racer's, which is the whole point of re-merging rather than
+// re-writing.
+func TestOCIIndexSurvivesALateClobber(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	defer fr.close()
+	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+
+	oldB, oldS, oldH := indexRetryBackoff, indexSettle, afterTagHook
+	indexRetryBackoff, afterTagHook = func(int) {}, nil
+	defer func() { indexRetryBackoff, indexSettle, afterTagHook = oldB, oldS, oldH }()
+
+	// The racer publishes darwin/arm64 for the same version, and its write lands
+	// during our settle window — once.
+	late := false
+	indexSettle = func() {
+		if late {
+			return
+		}
+		late = true
+		clobberIndexTo(t, c, "late.test", "1.0.0")
+	}
+
+	if _, err := c.PushWithReferrers("late.test", "1.0.0", "linux", "x86-64", makeGzTarball("z"), ".tar.gz", nil); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if !late {
+		t.Fatal("the settle window never ran, so nothing was tested")
+	}
+
+	repo, _ := c.repository("late.test")
+	idx := c.fetchOrNewIndex(context.Background(), repo, "1.0.0")
+	var found bool
+	for _, m := range idx.Manifests {
+		if m.Platform != nil && m.Platform.OS == "linux" && m.Platform.Architecture == "amd64" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("platform lost to a late clobber: %+v", idx.Manifests)
+	}
+}
