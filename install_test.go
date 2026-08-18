@@ -3,6 +3,7 @@ package bottle
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -122,5 +123,78 @@ func TestIsELF(t *testing.T) {
 	}
 	if IsELF(filepath.Join(dir, "missing")) {
 		t.Error("missing file should be false")
+	}
+}
+
+// TestSetupScratchRootfsAt: a builder stages a rootfs it is not running on, so
+// it cannot write /lib and /bin — those belong to the host. The rooted variant
+// writes the same loader and /bin/sh into a staging directory instead, for the
+// TARGET architecture, which need not be the host's.
+func TestSetupScratchRootfsAt(t *testing.T) {
+	root := t.TempDir()
+	name := LoaderNameFor("x86-64")
+	if name != "ld-linux-x86-64.so.2" {
+		t.Fatalf("loader name = %q", name)
+	}
+	if err := SetupScratchRootfsAt(root, name, "/pkgx/gnu.org/glibc/v2.44.0/lib/glibc-2.44/"+name, "/pkgx/gnu.org/bash/v5.3/bin/bash"); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{"lib", "lib64"} {
+		got, err := os.Readlink(filepath.Join(root, d, name))
+		if err != nil || !strings.HasSuffix(got, name) {
+			t.Errorf("%s/%s -> %q, %v", d, name, got, err)
+		}
+	}
+	if got, err := os.Readlink(filepath.Join(root, "bin", "sh")); err != nil || !strings.HasSuffix(got, "/bash") {
+		t.Errorf("bin/sh -> %q, %v", got, err)
+	}
+	// Idempotent: a second staging pass over the same directory is not an error.
+	if err := SetupScratchRootfsAt(root, name, "/x/"+name, "/x/sh"); err != nil {
+		t.Errorf("second pass: %v", err)
+	}
+	// Nothing to do is not an error either.
+	if err := SetupScratchRootfsAt(t.TempDir(), "", "", ""); err != nil {
+		t.Errorf("empty: %v", err)
+	}
+	// An unwritable root is reported, both for the loader and for the shell.
+	file := filepath.Join(t.TempDir(), "afile")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetupScratchRootfsAt(file, name, "/x/"+name, ""); err == nil {
+		t.Error("expected an error under a regular file (loader)")
+	}
+	if err := SetupScratchRootfsAt(file, "", "", "/x/sh"); err == nil {
+		t.Error("expected an error under a regular file (shell)")
+	}
+	// An unknown architecture has no loader to name.
+	if LoaderNameFor("mips") != "" {
+		t.Error("unknown arch must yield no loader name")
+	}
+}
+
+// A directory that exists but cannot be written to is the other way staging
+// fails: MkdirAll succeeds on it, the symlink does not.
+func TestSetupScratchRootfsAtReadOnlyDir(t *testing.T) {
+	name := LoaderNameFor("aarch64")
+
+	root := t.TempDir()
+	for _, d := range []string{"lib", "lib64"} {
+		if err := os.Mkdir(filepath.Join(root, d), 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(filepath.Join(root, d), 0o755) })
+	}
+	if err := SetupScratchRootfsAt(root, name, "/x/"+name, ""); err == nil {
+		t.Skip("this filesystem lets root write a read-only directory")
+	}
+
+	root2 := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root2, "bin"), 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(root2, "bin"), 0o755) })
+	if err := SetupScratchRootfsAt(root2, "", "", "/x/sh"); err == nil {
+		t.Error("expected the shell symlink to fail in a read-only dir")
 	}
 }
