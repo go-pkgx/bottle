@@ -156,12 +156,7 @@ func LibPath(closure []Resolved, dir string) string {
 }
 
 // LoaderName is the dynamic-loader soname for the current architecture.
-func LoaderName() string {
-	return map[string]string{
-		"aarch64": "ld-linux-aarch64.so.1",
-		"x86-64":  "ld-linux-x86-64.so.2",
-	}[goarch()]
-}
+func LoaderName() string { return LoaderNameFor(goarch()) }
 
 // FindLoader locates the pkgx glibc dynamic loader in an installed closure.
 func FindLoader(dir string) string {
@@ -239,4 +234,45 @@ func CanonicalLoaderExists() bool {
 		}
 	}
 	return false
+}
+
+// SetupScratchRootfsAt is SetupScratchRootfs against an arbitrary root, for a
+// rootfs being STAGED rather than the one being run on. A builder assembling a
+// FROM-scratch image on a host cannot write /lib and /bin — those belong to the
+// host — so it hands the staging directory here instead.
+//
+// loaderName is the loader's ELF name for the TARGET architecture, which is not
+// necessarily the host's: LoaderName() answers for the host, LoaderNameFor()
+// for whatever is being built.
+func SetupScratchRootfsAt(root, loaderName, loaderTarget, shellTarget string) error {
+	if loaderName != "" && loaderTarget != "" {
+		for _, d := range loaderDirs {
+			dir := filepath.Join(root, d)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return err
+			}
+			if err := os.Symlink(loaderTarget, filepath.Join(dir, loaderName)); err != nil && !os.IsExist(err) {
+				return err
+			}
+		}
+	}
+	if shellTarget != "" {
+		dir := filepath.Join(root, "bin")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		if err := os.Symlink(shellTarget, filepath.Join(dir, "sh")); err != nil && !os.IsExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+// LoaderNameFor answers LoaderName for an explicit architecture, so a builder
+// can name the loader of the image it is assembling.
+func LoaderNameFor(arch string) string {
+	return map[string]string{
+		"aarch64": "ld-linux-aarch64.so.1",
+		"x86-64":  "ld-linux-x86-64.so.2",
+	}[arch]
 }
