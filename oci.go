@@ -509,11 +509,13 @@ func (c *OCIClient) push(project, ver, osn, arch string, tarball []byte, ext str
 }
 
 // Reconcile seams (vars so tests can shrink them): indexRetryAttempts bounds the
-// loop, indexRetryBackoff paces retries, afterTagHook fires right after a tag
-// write so a test can simulate a concurrent clobber.
+// loop, indexRetryBackoff paces retries, indexSettle is how long a successful
+// write waits before confirming it is still there, and afterTagHook fires right
+// after a tag write so a test can simulate a concurrent clobber.
 var (
 	indexRetryAttempts = 6
 	indexRetryBackoff  = func(attempt int) { time.Sleep(time.Duration(attempt) * 20 * time.Millisecond) }
+	indexSettle        = func() { time.Sleep(2 * time.Second) }
 	afterTagHook       func()
 )
 
@@ -521,8 +523,28 @@ var (
 // index and re-tags, reconciling against concurrent writers: after each tag it
 // re-reads the index and, if a racing publisher clobbered the tag and dropped
 // our platform, re-merges from the now-current index (which preserves the
-// racer's platform) and retries until ours survives. Converges because every
-// retry starts from the latest tagged state, so writers only ever ADD platforms.
+// racer's platform) and retries until ours survives.
+//
+// Verifying ONCE is not enough, and that is not a theoretical worry — it
+// happened. python.org 3.14.7 was mirrored by the two arch jobs 350 ms apart:
+//
+//	14:18:42.63  ✅ MIRRORED python.org 3.14.7 linux/aarch64
+//	14:18:42.98  ✅ MIRRORED python.org 3.14.7 linux/x86-64
+//
+// and the published index listed only amd64. The arm64 bottle was pushed, its
+// manifest was fine, and it was simply not in the index — so every install for
+// that platform failed with "platform not in index". The loop below had already
+// run and had already confirmed arm64 was there: the clobber came AFTER, from a
+// writer whose read of the index predated arm64's write. A registry that serves
+// a stale read breaks the convergence argument — the racer re-merges from a
+// state that never had us in it, checks its OWN platform, and exits happy.
+//
+// So a write is confirmed twice, with a settle window between: the second check
+// catches a racer that landed just behind us, and the retry then re-merges from
+// the now-current index (which has the racer's platform) and puts both back.
+// This narrows the window rather than closing it — the honest fix is a
+// single-writer index composition, which needs the platforms to be enumerable
+// outside the index itself.
 func (c *OCIClient) mergePlatformIntoIndex(ctx context.Context, repo *remote.Repository, ver string, manDesc ocispec.Descriptor) error {
 	for attempt := 0; attempt < indexRetryAttempts; attempt++ {
 		idx := c.fetchOrNewIndex(ctx, repo, ver)
@@ -537,9 +559,14 @@ func (c *OCIClient) mergePlatformIntoIndex(ctx context.Context, repo *remote.Rep
 		if afterTagHook != nil {
 			afterTagHook()
 		}
-		// Verify our platform survived a possible concurrent clobber.
+		// Verify our platform survived a possible concurrent clobber, then wait
+		// out the window in which a racer's stale-read write would land, and
+		// verify again.
 		if indexHasManifest(c.fetchOrNewIndex(ctx, repo, ver), manDesc) {
-			return nil
+			indexSettle()
+			if indexHasManifest(c.fetchOrNewIndex(ctx, repo, ver), manDesc) {
+				return nil
+			}
 		}
 		indexRetryBackoff(attempt + 1)
 	}
