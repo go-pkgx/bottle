@@ -92,8 +92,13 @@ func TestSatisfiesSpacedGE(t *testing.T) {
 
 func TestHostSlug(t *testing.T) {
 	osn, arch := HostSlug()
-	if osn != "linux" && osn != "darwin" {
-		t.Errorf("os slug = %q", osn)
+	// Every slug osSlug can produce, not just the two this suite used to run
+	// on: the package builds and passes for js/wasm and wasip1/wasm too, and a
+	// test that hardcodes the platforms it expects to run on fails the day it
+	// runs somewhere new — which is the day you most want it green.
+	known := map[string]bool{"linux": true, "darwin": true, "windows": true, "js": true, "wasip1": true}
+	if !known[osn] {
+		t.Errorf("os slug = %q, not one of %v", osn, known)
 	}
 	if arch == "" {
 		t.Error("empty arch slug")

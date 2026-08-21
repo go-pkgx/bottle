@@ -615,8 +615,21 @@ func FetchMetaFor(project, osn, arch string) (deps map[string]string, provides [
 	return deps, provides, nil
 }
 
+// platformKeys are the OS names a recipe may use to scope a dependency block.
+// A name absent from this list is read as a PROJECT — which is why adding an OS
+// to osSlug without adding it here turns a recipe's `js:` block into a
+// dependency on a package called "js". The suite under js/wasm caught exactly
+// that: TestFetchMeta builds its fixture from HostSlug(), so the moment the host
+// reported "js" the block stopped being a platform.
+var platformKeys = []string{"linux", "darwin", "windows", "js", "wasip1"}
+
 func isPlatformKey(k string) bool {
-	return k == "linux" || k == "darwin" || strings.HasPrefix(k, "linux/") || strings.HasPrefix(k, "darwin/")
+	for _, p := range platformKeys {
+		if k == p || strings.HasPrefix(k, p+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func platformMatches(k, osn, arch string) bool {
