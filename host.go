@@ -10,15 +10,31 @@ package bottle
 import "runtime"
 
 // osSlug maps a Go GOOS value to the pkgx OS slug. Everything that is not
-// darwin/windows is treated as linux (pkgx only bottles those three families).
-// It is a pure function so every branch is unit-testable without needing to be
-// built for that OS.
+// named here is treated as linux (pkgx bottles those three families, and an
+// exotic unix is closer to linux than to nothing). It is a pure function so
+// every branch is unit-testable without needing to be built for that OS.
+//
+// js and wasip1 are named because the linux default is WRONG for them, not
+// merely approximate. This package compiles and passes for both, so it runs in
+// a browser and under a WASI runtime — and there it used to report
+//
+//	HostSlug() = "linux" / "wasm"
+//
+// a platform that does not exist and never will. A consumer asking the registry
+// for linux/wasm bottles gets nothing, forever, with no hint as to why. They
+// stay distinct from each other too: a WASI guest and a browser are different
+// hosts (different imports, different capabilities), so a module built for one
+// is not a bottle for the other.
 func osSlug(g string) string {
 	switch g {
 	case "darwin":
 		return "darwin"
 	case "windows":
 		return "windows"
+	case "js":
+		return "js"
+	case "wasip1":
+		return "wasip1"
 	default:
 		return "linux"
 	}
