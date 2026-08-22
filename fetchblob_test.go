@@ -1,3 +1,7 @@
+// The resume/retry behaviour under test belongs to the DISK staging; the
+// browser build holds a blob in memory and lets fetch own the transfer.
+//go:build !js
+
 package bottle
 
 import (
