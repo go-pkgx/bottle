@@ -1,3 +1,5 @@
+//go:build !js
+
 package bottle
 
 import (
@@ -58,7 +60,7 @@ func TestBlobFileCloseRemoves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := f.Name()
+	path := f.ReadSeeker.(interface{ Name() string }).Name()
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("staged file missing while open: %v", err)
 	}
