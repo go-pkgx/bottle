@@ -921,6 +921,19 @@ func FetchRuntimeEnv(project, prefix, version string) (map[string]string, error)
 // placeholder left unresolved would end up verbatim in the environment, so an
 // unknown one is dropped rather than exported as literal moustaches.
 func expandRecipeVars(s, prefix, version string) string {
+	// `${{prefix}}` is how 338 of the pantry's recipes write the placeholder,
+	// and the `$` belongs to the placeholder, not to the value. Replacing only
+	// the braces left it behind:
+	//
+	//	SSL_CERT_FILE=$/…/curl.se/ca-certs/v2026.8.13/ssl/cert.pem
+	//	PYTHONPATH=$/…/gnome.org/libxml2/v2.13.9/lib/python3.11/site-packages
+	//
+	// curl says so out loud — "error adding trust anchors from file: $/…" —
+	// and everything else just silently fails to find what it was pointed at.
+	//
+	// Only a `$` GLUED to the braces goes: `$PYTHONPATH:${{prefix}}/lib` has a
+	// real shell variable in it, and that one has to survive.
+	s = strings.ReplaceAll(s, "${{", "{{")
 	v := ParseVer(version)
 	rep := strings.NewReplacer(
 		"{{prefix}}", prefix,
