@@ -250,7 +250,15 @@ func (c *OCIClient) ListTags(project string) ([]string, error) {
 	}
 	var tags []string
 	err = repo.Tags(context.Background(), "", func(page []string) error {
-		tags = append(tags, page...)
+		for _, t := range page {
+			// `<ver>--<os>-<arch>` names one platform's manifest, not a version.
+			// Letting it through would make every published platform look like a
+			// release of its own to anything listing versions.
+			if IsPlatformTag(t) {
+				continue
+			}
+			tags = append(tags, t)
+		}
 		return nil
 	})
 	if err != nil {
@@ -519,11 +527,34 @@ func (c *OCIClient) push(project, ver, osn, arch string, tarball []byte, ext str
 	// the SAME (project, version) — e.g. the two arch matrix jobs both hitting a
 	// shared dependency's first publish — could clobber each other (last write
 	// wins, silently dropping a platform). mergePlatformIntoIndex reconciles.
+	// Tag this platform's manifest under a name only THIS publisher writes, so
+	// the set of platforms is enumerable outside the index. That is what makes
+	// the index composable rather than merge-able: see platformTag.
+	if _, err := oras.Tag(ctx, repo, manDesc.Digest.String(), platformTag(ver, osn, arch)); err != nil {
+		return manDesc, fmt.Errorf("tag platform manifest: %w", err)
+	}
 	if err := c.mergePlatformIntoIndex(ctx, repo, ver, manDesc); err != nil {
 		return manDesc, err
 	}
 	return manDesc, nil
 }
+
+// platformTag names one platform's manifest for a version: `<ver>--<os>-<arch>`.
+//
+// Only the job publishing that platform ever writes it, so it is never
+// contended — unlike the version tag, where two arch jobs race on one mutable
+// index and 428 entries were silently lost in a day's publishing.
+//
+// The DOUBLE dash is deliberate. A single one would make `1.2.3-linux-x86-64`
+// look like a semver pre-release and be counted as a version by anything
+// walking the tag list.
+func platformTag(ver, osn, arch string) string {
+	return ver + "--" + osn + "-" + arch
+}
+
+// IsPlatformTag reports whether a tag names a platform manifest rather than a
+// version. Consumers walking a repository's tags need to skip these.
+func IsPlatformTag(tag string) bool { return strings.Contains(tag, "--") }
 
 // Reconcile seams (vars so tests can shrink them): indexRetryAttempts bounds the
 // loop, indexRetryBackoff paces retries, indexSettle is how long a successful
@@ -566,6 +597,15 @@ var (
 func (c *OCIClient) mergePlatformIntoIndex(ctx context.Context, repo *remote.Repository, ver string, manDesc ocispec.Descriptor) error {
 	for attempt := 0; attempt < indexRetryAttempts; attempt++ {
 		idx := c.fetchOrNewIndex(ctx, repo, ver)
+		// Compose from the per-platform tags, not just from what the index
+		// happens to say. Those tags are uncontended, so every racer sees the
+		// same set and writes the same COMPLETE index: a clobber then replaces
+		// an index with an identical one instead of dropping a platform. The
+		// index's own contents are still merged in, so versions published
+		// before platform tags existed keep theirs.
+		for _, d := range c.platformManifests(ctx, repo, ver) {
+			idx.Manifests = upsertPlatform(idx.Manifests, d)
+		}
 		idx.Manifests = upsertPlatform(idx.Manifests, manDesc)
 		idxBytes, err := marshalIndex(idx)
 		if err != nil {
@@ -699,4 +739,44 @@ func upsertPlatform(list []ocispec.Descriptor, desc ocispec.Descriptor) []ocispe
 		out = append(out, m)
 	}
 	return append(out, desc)
+}
+
+// platformManifests lists the per-platform manifests published for one version,
+// read from the uncontended `<ver>--<os>-<arch>` tags.
+//
+// A registry that will not list tags yields nothing rather than an error: the
+// composition then falls back to the index's own contents, which is exactly the
+// behaviour that preceded platform tags.
+func (c *OCIClient) platformManifests(ctx context.Context, repo *remote.Repository, ver string) []ocispec.Descriptor {
+	prefix := ver + "--"
+	var out []ocispec.Descriptor
+	err := repo.Tags(ctx, "", func(page []string) error {
+		for _, t := range page {
+			if !strings.HasPrefix(t, prefix) {
+				continue
+			}
+			desc, err := repo.Resolve(ctx, t)
+			if err != nil {
+				continue
+			}
+			if desc.Platform == nil {
+				// Resolve returns a bare manifest descriptor, so the platform
+				// comes from the tag. It carries the PKGX arch ("x86-64"), and
+				// the index carries the OCI one ("amd64") — without the
+				// conversion the composition adds a second entry for the same
+				// platform instead of recognising it.
+				osn, arch, ok := strings.Cut(strings.TrimPrefix(t, prefix), "-")
+				if !ok {
+					continue
+				}
+				desc.Platform = &ocispec.Platform{OS: osn, Architecture: ociArch(arch)}
+			}
+			out = append(out, desc)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil
+	}
+	return out
 }
