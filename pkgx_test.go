@@ -813,3 +813,59 @@ func TestInstallForTargetPlatform(t *testing.T) {
 		t.Error("Install must still resolve for the host platform")
 	}
 }
+
+// TestPickVersionForSkipsUnpublishedPlatform is the linux-headers episode in
+// miniature: a mirror wave lands 7.2.1 for arm64 only, and resolving x86-64
+// must NOT pick it — the tag listing spans platforms, the bottle does not.
+//
+// Before this, staging a sovereign rootfs died with
+//
+//	install kernel.org/linux-headers 7.2.1: no bottle for
+//	kernel.org/linux-headers v7.2.1 (linux/x86-64): platform not in index
+//
+// naming a version nobody had asked for.
+func TestPickVersionForSkipsUnpublishedPlatform(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	oldDist, oldUp := DistBase, UpstreamDist
+	base := fr.base("go-pkgx/bottles")
+	DistBase = base
+	// Any fallback to the upstream dist would mask the behaviour under test.
+	UpstreamDist = "https://upstream.invalid"
+	resetOCICache()
+	t.Cleanup(func() {
+		DistBase, UpstreamDist = oldDist, oldUp
+		resetOCICache()
+	})
+
+	c, err := NewOCIClient(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 7.1.8 on both arches; 7.2.1 on arm64 only.
+	for _, a := range []string{"x86-64", "aarch64"} {
+		if _, err := c.PushWithReferrers("hdr.test", "7.1.8", "linux", a, makeGzTarball("b"), ".tar.gz", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := c.PushWithReferrers("hdr.test", "7.2.1", "linux", "aarch64", makeGzTarball("b"), ".tar.gz", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// aarch64 gets the newest; x86-64 steps over it to the one it can install.
+	if v, err := PickVersionFor("hdr.test", "*", "linux", "aarch64"); err != nil || v.Raw != "7.2.1" {
+		t.Errorf("aarch64: got %q err=%v, want 7.2.1", v.Raw, err)
+	}
+	if v, err := PickVersionFor("hdr.test", "*", "linux", "x86-64"); err != nil || v.Raw != "7.1.8" {
+		t.Errorf("x86-64: got %q err=%v, want 7.1.8", v.Raw, err)
+	}
+
+	// A constraint only the unpublished version satisfies must say so, and say
+	// which version it stepped over — the old message blamed the constraint.
+	_, err = PickVersionFor("hdr.test", "=7.2.1", "linux", "x86-64")
+	if err == nil {
+		t.Fatal("=7.2.1 on x86-64 should fail")
+	}
+	if !strings.Contains(err.Error(), "7.2.1") || !strings.Contains(err.Error(), "not published here") {
+		t.Errorf("error should name the version and why: %v", err)
+	}
+}

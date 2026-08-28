@@ -328,6 +328,16 @@ func FetchVersions(project string) ([]Ver, error) {
 // time — the actual bottle *pull* still goes through DistBase unchanged, so this
 // only affects version listing, not the install source.
 func VersionsFor(project, osn, arch string) ([]Ver, error) {
+	vs, _, err := versionsForSourced(project, osn, arch)
+	return vs, err
+}
+
+// versionsForSourced is VersionsFor plus WHERE the list came from: true when it
+// is this registry's tag listing, false when it fell back to the upstream dist.
+// The distinction matters because the tag listing is not per-platform, so a
+// caller that must pick an INSTALLABLE version has to check membership itself —
+// see PickVersionFor.
+func versionsForSourced(project, osn, arch string) ([]Ver, bool, error) {
 	if IsOCI(DistBase) {
 		vs, err := ociVersionsFor(project)
 		if err != nil {
@@ -338,16 +348,19 @@ func VersionsFor(project, osn, arch string) ([]Ver, error) {
 			// back to the upstream dist rather than failing the whole recipe.
 			// Genuine transient/auth errors still propagate.
 			if repoAbsent(err) {
-				return httpVersionsFor(UpstreamDist, project, osn, arch)
+				up, err := httpVersionsFor(UpstreamDist, project, osn, arch)
+				return up, false, err
 			}
-			return nil, err
+			return nil, false, err
 		}
 		if len(vs) > 0 {
-			return vs, nil
+			return vs, true, nil
 		}
-		return httpVersionsFor(UpstreamDist, project, osn, arch)
+		up, err := httpVersionsFor(UpstreamDist, project, osn, arch)
+		return up, false, err
 	}
-	return httpVersionsFor(DistBase, project, osn, arch)
+	vs, err := httpVersionsFor(DistBase, project, osn, arch)
+	return vs, false, err
 }
 
 // repoAbsent reports whether err signals that the OCI registry simply does not
@@ -510,16 +523,51 @@ func PickVersion(project, constraint string) (Ver, error) {
 // where the darwin one does not — so a host that stages a rootfs for another
 // platform must resolve against that platform's catalogue, not its own.
 func PickVersionFor(project, constraint, osn, arch string) (Ver, error) {
-	vs, err := VersionsFor(project, osn, arch)
+	vs, fromRegistry, err := versionsForSourced(project, osn, arch)
 	if err != nil {
 		return Ver{}, err
 	}
+	// Our registry's tag listing spans every platform, so the newest tag that
+	// satisfies a constraint is not necessarily installable for the one being
+	// resolved: a mirror wave that lands one arch publishes a tag the other
+	// arch cannot use. Picking it produced
+	//     install kernel.org/linux-headers 7.2.1: no bottle for
+	//     kernel.org/linux-headers v7.2.1 (linux/x86-64): platform not in index
+	// at STAGING time, where the only clue is a version nobody asked for.
+	// Membership is checked lazily, newest-first, so the ordinary case costs one
+	// index fetch and a half-published version is stepped over instead.
+	var absent []string
 	for i := len(vs) - 1; i >= 0; i-- {
-		if vs[i].satisfies(constraint) {
-			return vs[i], nil
+		if !vs[i].satisfies(constraint) {
+			continue
 		}
+		if fromRegistry {
+			ok, err := publishedFor(project, vs[i], osn, arch)
+			if err != nil {
+				return Ver{}, err
+			}
+			if !ok {
+				absent = append(absent, vs[i].Raw)
+				continue
+			}
+		}
+		return vs[i], nil
+	}
+	if len(absent) > 0 {
+		return Ver{}, fmt.Errorf("no version of %s satisfies %q AND is published for %s/%s (available: %d; satisfy but not published here: %s)",
+			project, constraint, osn, arch, len(vs), strings.Join(absent, " "))
 	}
 	return Ver{}, fmt.Errorf("no version of %s satisfies %q (available: %d)", project, constraint, len(vs))
+}
+
+// publishedFor reports whether this version carries a manifest for os/arch in
+// the registry DistBase names.
+func publishedFor(project string, v Ver, osn, arch string) (bool, error) {
+	c, err := ociClientForDist()
+	if err != nil {
+		return false, err
+	}
+	return c.HasPlatform(project, v.tag(), osn, arch)
 }
 
 // Satisfies reports whether the version meets a pkgx constraint
