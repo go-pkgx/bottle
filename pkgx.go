@@ -45,6 +45,22 @@ var (
 	// `pkgx +<pkg>` installs, so a {{deps.<p>.prefix}} token resolves to the same
 	// version pkgx actually installs at build time. Overridable in tests.
 	UpstreamDist = "https://dist.pkgx.dev"
+
+	// CacheBase is an OCI registry consulted for the BOTTLE ITSELF before
+	// DistBase — a pull-through cache next to the builders, so a job does not
+	// fetch llvm.org's ~1.7 GiB across the network again.
+	//
+	// It deliberately takes NO part in resolution. A pull-through cache cannot
+	// list the tags of a repository it has not synced yet, so listing against it
+	// falls back to the upstream dist, which yields a VERSION where our registry
+	// wants a TAG — gnu.org/bash is published as `5.3`, not `5.3.0` — and the
+	// pull then 404s on a tag that never existed. Measured; it is why this is a
+	// separate variable and not simply PKGX_DIST pointed elsewhere.
+	//
+	// What the cache serves is still verified against the signature DistBase
+	// advertises, so a cache that returns the wrong bytes is rejected rather
+	// than trusted.
+	CacheBase = ""
 )
 
 func init() { applyEnv(Env) }
@@ -58,17 +74,33 @@ var (
 )
 
 // ociClientForDist returns the OCIClient for the current DistBase, cached.
-func ociClientForDist() (*OCIClient, error) {
+func ociClientForDist() (*OCIClient, error) { return ociClientFor(DistBase) }
+
+// ociCacheClient returns the client for CacheBase, or nil when no cache is
+// configured or it is not an OCI registry. A cache that cannot be reached is
+// not an error: the caller falls back to DistBase.
+func ociCacheClient() *OCIClient {
+	if CacheBase == "" || !IsOCI(CacheBase) {
+		return nil
+	}
+	c, err := ociClientFor(CacheBase)
+	if err != nil {
+		return nil
+	}
+	return c
+}
+
+func ociClientFor(base string) (*OCIClient, error) {
 	ociClientMu.Lock()
 	defer ociClientMu.Unlock()
-	if c, ok := ociClientCache[DistBase]; ok {
+	if c, ok := ociClientCache[base]; ok {
 		return c, nil
 	}
-	c, err := NewOCIClient(DistBase)
+	c, err := NewOCIClient(base)
 	if err != nil {
 		return nil, err
 	}
-	ociClientCache[DistBase] = c
+	ociClientCache[base] = c
 	return c, nil
 }
 
@@ -82,6 +114,9 @@ func applyEnv(get func(string) string) {
 	}
 	if p := get("PKGX_PANTRY_OVERLAY"); p != "" {
 		PantryOverlay = strings.TrimRight(p, "/")
+	}
+	if c := get("PKGX_CACHE"); c != "" {
+		CacheBase = strings.TrimRight(c, "/")
 	}
 }
 
@@ -868,6 +903,17 @@ func fetchBottle(r Resolved, osn, arch string) (io.ReadCloser, string, error) {
 		// 2 GiB micro-VM mid-build. The file is removed when the caller closes
 		// it, and the digest computed on the way past is what the signature is
 		// checked against — so the tarball is never read twice either.
+		// The cache is an optimisation and never an authority: whatever it
+		// serves is checked against the digest and signature DistBase
+		// advertises, and any failure falls through to the registry itself.
+		if cc := ociCacheClient(); cc != nil {
+			if f, ext, err := cc.PullFile(r.Project, tag, osn, arch); err == nil {
+				if err := verifyPulledDigest(c, r.Project, tag, osn, arch, f.Digest); err == nil {
+					return f, ext, nil
+				}
+				f.Close()
+			}
+		}
 		f, ext, err := c.PullFile(r.Project, tag, osn, arch)
 		if err != nil {
 			return nil, "", err
