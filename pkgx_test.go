@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
+	"github.com/go-attest/sign"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -867,5 +869,87 @@ func TestPickVersionForSkipsUnpublishedPlatform(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "7.2.1") || !strings.Contains(err.Error(), "not published here") {
 		t.Errorf("error should name the version and why: %v", err)
+	}
+}
+
+// TestFetchBottleUsesCacheButTrustsTheRegistry: the pull-through cache serves
+// the bytes and the REGISTRY still says whether they are the right ones.
+//
+// The cache exists because staging a sovereign rootfs pulls ~2 GiB per job. It
+// must not become PKGX_DIST: zot cannot list the tags of a repository it has
+// not synced, so resolution would fall back to the upstream dist and ask for a
+// VERSION where our registry uses a TAG — gnu.org/bash is published as `5.3`,
+// not `5.3.0` — and the pull 404s on a tag that never existed.
+func TestFetchBottleUsesCacheButTrustsTheRegistry(t *testing.T) {
+	real := newFakeRegistry(t, false)
+	cache := newFakeRegistry(t, false)
+	realBase, cacheBase := real.base("go-pkgx/bottles"), cache.base("go-pkgx/bottles")
+
+	kp, err := sign.Generate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldKey := SigningPublicKey
+	SigningPublicKey = kp.PublicKeyString()
+	oldDist, oldCache := DistBase, CacheBase
+	DistBase, CacheBase = realBase, cacheBase
+	resetOCICache()
+	t.Cleanup(func() {
+		SigningPublicKey = oldKey
+		DistBase, CacheBase = oldDist, oldCache
+		resetOCICache()
+	})
+
+	body := makeGzTarball("payload")
+	rc, err := NewOCIClient(realBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cc, err := NewOCIClient(cacheBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pushSignedBottle(t, rc, "c.test", kp, body, true)
+	pushSignedBottle(t, cc, "c.test", kp, body, true)
+
+	r := Resolved{Project: "c.test", Version: ParseVer("1.0.0")}
+	read := func(what string) []byte {
+		t.Helper()
+		f, _, err := fetchBottle(r, "linux", "x86-64")
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		defer f.Close()
+		b, err := io.ReadAll(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+
+	if !bytes.Equal(read("warm cache"), body) {
+		t.Error("warm cache returned the wrong bytes")
+	}
+
+	// A cache that does not carry it must not fail the install — the registry does.
+	CacheBase = cache.base("go-pkgx/empty")
+	resetOCICache()
+	if !bytes.Equal(read("cache miss"), body) {
+		t.Error("a cache miss did not fall back to the registry")
+	}
+
+	// A cache serving DIFFERENT bytes is rejected, and the registry answers
+	// instead. This is the property that makes the cache safe to add at all:
+	// it is an optimisation, never an authority.
+	other := newFakeRegistry(t, false)
+	oc, err := NewOCIClient(other.base("go-pkgx/bottles"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pushSignedBottle(t, oc, "c.test", kp, makeGzTarball("tampered"), true)
+	CacheBase = other.base("go-pkgx/bottles")
+	resetOCICache()
+	if !bytes.Equal(read("tampered cache"), body) {
+		t.Error("a cache serving different bytes was trusted")
 	}
 }
