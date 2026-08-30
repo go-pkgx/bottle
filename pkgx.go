@@ -577,7 +577,7 @@ func PickVersionFor(project, constraint, osn, arch string) (Ver, error) {
 			continue
 		}
 		if fromRegistry {
-			ok, err := publishedFor(project, vs[i], osn, arch)
+			tag, ok, err := publishedTagFor(project, vs[i], osn, arch)
 			if err != nil {
 				return Ver{}, err
 			}
@@ -585,6 +585,9 @@ func PickVersionFor(project, constraint, osn, arch string) (Ver, error) {
 				absent = append(absent, vs[i].Raw)
 				continue
 			}
+			v := vs[i]
+			v.Tag = tag
+			return v, nil
 		}
 		return vs[i], nil
 	}
@@ -595,14 +598,62 @@ func PickVersionFor(project, constraint, osn, arch string) (Ver, error) {
 	return Ver{}, fmt.Errorf("no version of %s satisfies %q (available: %d)", project, constraint, len(vs))
 }
 
-// publishedFor reports whether this version carries a manifest for os/arch in
-// the registry DistBase names.
-func publishedFor(project string, v Ver, osn, arch string) (bool, error) {
+// publishedTagFor finds which registry TAG carries this version for os/arch,
+// trying every spelling the version can be written in.
+//
+// Our registry carries more than one spelling of the same version, and they do
+// not always hold the same platforms: gnu.org/tar has the linux bottles under
+// `1.35` and the darwin ones under `1.35.0`. selectVersions deliberately
+// collapses those to ONE candidate — leaving both would make the pick depend on
+// the registry's listing order, which once installed two glibc trees side by
+// side — so the spelling that wins may be the one that lacks this platform.
+// Checking only it reported the version as unpublished while its bottles were
+// sitting under the other tag:
+//
+//	resolve deps: no version of gnu.org/tar satisfies "*" AND is published
+//	for linux/x86-64 (available: 1; satisfy but not published here: 1.35.0)
+func publishedTagFor(project string, v Ver, osn, arch string) (string, bool, error) {
 	c, err := ociClientForDist()
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
-	return c.HasPlatform(project, v.tag(), osn, arch)
+	for _, tag := range tagSpellings(v) {
+		ok, err := c.HasPlatform(project, tag, osn, arch)
+		if err != nil {
+			return "", false, err
+		}
+		if ok {
+			return tag, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// tagSpellings lists the tags that can denote this version, the one the listing
+// chose first. A glibc-flavored tag is left alone: it names one BUILD of a
+// version, and trimming it would name a different artifact.
+func tagSpellings(v Ver) []string {
+	first := v.tag()
+	if v.Tag != "" {
+		return []string{first}
+	}
+	out := []string{first}
+	seen := map[string]bool{first: true}
+	nums := v.Nums
+	// "1.35.0" also spelled "1.35" and "1"; "1.2" also spelled "1.2.0".
+	for n := len(nums); n > 0; n-- {
+		parts := make([]string, n)
+		for i := 0; i < n; i++ {
+			parts[i] = strconv.Itoa(nums[i])
+		}
+		for _, cand := range []string{strings.Join(parts, "."), strings.Join(parts, ".") + ".0"} {
+			if !seen[cand] {
+				seen[cand] = true
+				out = append(out, cand)
+			}
+		}
+	}
+	return out
 }
 
 // Satisfies reports whether the version meets a pkgx constraint

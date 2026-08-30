@@ -999,3 +999,52 @@ func TestFetchRuntimeEnvPlatformBlock(t *testing.T) {
 		t.Errorf("another platform's block leaked in: %v", env)
 	}
 }
+
+// TestPickVersionForTriesEveryTagSpelling: our registry carries more than one
+// spelling of the same version, and they do not hold the same platforms.
+// gnu.org/tar has the linux bottles under `1.35` and the darwin ones under
+// `1.35.0`; selectVersions collapses both to ONE candidate, so the spelling
+// that wins may be the one lacking this platform. Checking only it reported
+//
+//	no version of gnu.org/tar satisfies "*" AND is published for linux/x86-64
+//	  (available: 1; satisfy but not published here: 1.35.0)
+//
+// while the bottles sat under the other tag — which blocked every recipe
+// depending on tar.
+func TestPickVersionForTriesEveryTagSpelling(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	base := fr.base("go-pkgx/bottles")
+	old := DistBase
+	DistBase = base
+	resetOCICache()
+	t.Cleanup(func() { DistBase = old; resetOCICache() })
+
+	c, err := NewOCIClient(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The two spellings, each carrying a DIFFERENT platform.
+	if _, err := c.PushWithReferrers("tar.test", "1.35", "linux", "x86-64", makeGzTarball("linux"), ".tar.gz", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.PushWithReferrers("tar.test", "1.35.0", "darwin", "aarch64", makeGzTarball("darwin"), ".tar.gz", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	v, err := PickVersionFor("tar.test", "*", "linux", "x86-64")
+	if err != nil {
+		t.Fatalf("linux/x86-64 is published under the other spelling: %v", err)
+	}
+	if v.tag() != "1.35" {
+		t.Errorf("tag = %q, want the spelling that carries linux (1.35)", v.tag())
+	}
+
+	if v, err := PickVersionFor("tar.test", "*", "darwin", "aarch64"); err != nil || v.tag() != "1.35.0" {
+		t.Errorf("darwin: tag %q err %v, want 1.35.0", v.tag(), err)
+	}
+
+	// A platform neither spelling carries is still a clean refusal.
+	if _, err := PickVersionFor("tar.test", "*", "linux", "aarch64"); err == nil {
+		t.Error("a platform no spelling carries must still fail")
+	}
+}
