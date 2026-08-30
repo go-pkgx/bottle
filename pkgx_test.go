@@ -953,3 +953,49 @@ func TestFetchBottleUsesCacheButTrustsTheRegistry(t *testing.T) {
 		t.Error("a cache serving different bytes was trusted")
 	}
 }
+
+// TestFetchRuntimeEnvPlatformBlock: `runtime: env:` is not a flat table. A
+// recipe may key part of it by platform, and rust-lang.org/cargo does — which
+// made our pkgx answer
+//
+//	cannot read rust-lang.org/cargo's runtime env:
+//	  rust-lang.org/cargo/package.yml: yaml: unmarshal errors:
+//	  line 15: cannot unmarshal !!map into string
+//
+// and lose the WHOLE runtime env, not just the platform half. Every crates.io
+// recipe then built without cargo's environment.
+func TestFetchRuntimeEnvPlatformBlock(t *testing.T) {
+	osn, arch := HostSlug()
+	other := "darwin"
+	if osn == "darwin" {
+		other = "linux"
+	}
+	yml := "runtime:\n  env:\n" +
+		"    FLAT: \"{{prefix}}/flat\"\n" +
+		"    LIST:\n      - a\n      - \"{{prefix}}/b\"\n" +
+		"    " + osn + ":\n      HERE: \"{{prefix}}/here\"\n" +
+		"    " + osn + "/" + arch + ":\n      EXACT: \"1\"\n" +
+		"    " + other + ":\n      ELSEWHERE: \"no\"\n" +
+		"provides:\n  - bin/x\n"
+	defer fakeServer(t, map[string]fakePkg{
+		"plat.test": {versions: []string{"1.0.0"}, yaml: yml},
+	})()
+
+	env, err := FetchRuntimeEnv("plat.test", "/opt/plat", "1.0.0")
+	if err != nil {
+		t.Fatalf("a platform block must not fail the whole read: %v", err)
+	}
+	for k, want := range map[string]string{
+		"FLAT":  "/opt/plat/flat",
+		"LIST":  "a /opt/plat/b",
+		"HERE":  "/opt/plat/here",
+		"EXACT": "1",
+	} {
+		if env[k] != want {
+			t.Errorf("%s = %q, want %q", k, env[k], want)
+		}
+	}
+	if _, ok := env["ELSEWHERE"]; ok {
+		t.Errorf("another platform's block leaked in: %v", env)
+	}
+}

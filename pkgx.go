@@ -983,9 +983,22 @@ func writeVersionLinks(pkgxDir string, r Resolved) {
 // PERL5LIB so the module is findable, and without that export help2man dies
 // with "Can't locate Locale/gettext.pm in @INC" — which is how gnu.org/libidn2
 // failed to build. Perl, Python, Ruby and Tcl module packages all work this way.
+//
+// The block is NOT a flat table. A recipe may key part of it by platform, and
+// rust-lang.org/cargo does:
+//
+//	runtime:
+//	  env:
+//	    CARGO_INSTALL_ROOT: ${{home}}/.local
+//	    linux:
+//	      CARGO_HTTP_CAINFO: ${{deps.curl.se/ca-certs.prefix}}/ssl/cert.pem
+//
+// Read as map[string]string that is `line 15: cannot unmarshal !!map into
+// string`, and the WHOLE runtime env is then lost — not just the linux half.
+// A value may also be a list, which the pantry joins with spaces.
 type runtimeYML struct {
 	Runtime struct {
-		Env map[string]string `yaml:"env"`
+		Env map[string]any `yaml:"env"`
 	} `yaml:"runtime"`
 }
 
@@ -1002,10 +1015,34 @@ func FetchRuntimeEnv(project, prefix, version string) (map[string]string, error)
 		return nil, fmt.Errorf("%s/package.yml: %w", project, err)
 	}
 	out := make(map[string]string, len(y.Runtime.Env))
-	for k, v := range y.Runtime.Env {
-		out[k] = expandRecipeVars(v, prefix, version)
-	}
+	osn, arch := HostSlug()
+	flattenEnv(y.Runtime.Env, out, osn, arch, prefix, version)
 	return out, nil
+}
+
+// flattenEnv copies scalar entries and descends into the platform-keyed blocks
+// that apply here, so `linux:` reaches a linux host and `darwin:` does not. A
+// map under any other key is a platform this host is not, and is skipped —
+// silently, because a recipe naming platforms we do not build for is normal.
+func flattenEnv(in map[string]any, out map[string]string, osn, arch, prefix, version string) {
+	for k, v := range in {
+		switch val := v.(type) {
+		case map[string]any:
+			if k == osn || k == osn+"/"+arch || k == arch {
+				flattenEnv(val, out, osn, arch, prefix, version)
+			}
+		case []any:
+			parts := make([]string, 0, len(val))
+			for _, e := range val {
+				parts = append(parts, expandRecipeVars(fmt.Sprint(e), prefix, version))
+			}
+			out[k] = strings.Join(parts, " ")
+		case nil:
+			// an empty value is not a declaration
+		default:
+			out[k] = expandRecipeVars(fmt.Sprint(val), prefix, version)
+		}
+	}
 }
 
 // expandRecipeVars resolves the moustache placeholders that can appear in a
