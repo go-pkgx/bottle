@@ -1075,25 +1075,74 @@ func FetchRuntimeEnv(project, prefix, version string) (map[string]string, error)
 // that apply here, so `linux:` reaches a linux host and `darwin:` does not. A
 // map under any other key is a platform this host is not, and is skipped —
 // silently, because a recipe naming platforms we do not build for is normal.
+//
+// The platform keys and the array rule come from libpkgx's platform_reduce,
+// which is the reference implementation: it matches `linux`, `darwin`,
+// `linux/x86-64`-style pairs AND a bare arch, and says of the values
+//
+//	// if user specifies an array then we assume we are supplementing
+//	// otherwise we are replacing.
+//
+// so a list inside a platform block APPENDS to what the flat block set, while a
+// scalar replaces it. Reading that first would have saved a guess: I had it
+// replacing in both cases.
 func flattenEnv(in map[string]any, out map[string]string, osn, arch, prefix, version string) {
+	// Flat entries first, so a platform block supplements what they set —
+	// Go map iteration has no order of its own.
 	for k, v := range in {
-		switch val := v.(type) {
-		case map[string]any:
-			if k == osn || k == osn+"/"+arch || k == arch {
-				flattenEnv(val, out, osn, arch, prefix, version)
-			}
-		case []any:
-			parts := make([]string, 0, len(val))
-			for _, e := range val {
-				parts = append(parts, expandRecipeVars(fmt.Sprint(e), prefix, version))
-			}
-			out[k] = strings.Join(parts, " ")
-		case nil:
-			// an empty value is not a declaration
-		default:
-			out[k] = expandRecipeVars(fmt.Sprint(val), prefix, version)
+		if _, isPlatform := platformBlock(v, k, osn, arch); !isPlatform {
+			setEnv(out, k, v, prefix, version, false)
 		}
 	}
+	for k, v := range in {
+		if blk, ok := platformBlock(v, k, osn, arch); ok {
+			for bk, bv := range blk {
+				_, supplement := bv.([]any)
+				setEnv(out, bk, bv, prefix, version, supplement)
+			}
+		}
+	}
+}
+
+// platformBlock reports whether this key names a platform block that applies to
+// osn/arch, returning its contents. A map under a key naming ANY platform is a
+// platform block — one that does not apply is dropped, not treated as a value.
+func platformBlock(v any, k, osn, arch string) (map[string]any, bool) {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	switch k {
+	case osn, osn + "/" + arch, arch:
+		return m, true
+	case "linux", "darwin", "x86-64", "aarch64",
+		"linux/x86-64", "linux/aarch64", "darwin/x86-64", "darwin/aarch64":
+		return nil, true // another platform's block: applies to nobody here
+	}
+	return nil, false
+}
+
+func setEnv(out map[string]string, k string, v any, prefix, version string, supplement bool) {
+	var val string
+	switch t := v.(type) {
+	case []any:
+		parts := make([]string, 0, len(t))
+		for _, e := range t {
+			parts = append(parts, expandRecipeVars(fmt.Sprint(e), prefix, version))
+		}
+		val = strings.Join(parts, " ")
+	case nil:
+		return // an empty value is not a declaration
+	case map[string]any:
+		return // a map that is not a platform block is not a value
+	default:
+		val = expandRecipeVars(fmt.Sprint(t), prefix, version)
+	}
+	if supplement && out[k] != "" {
+		out[k] += " " + val
+		return
+	}
+	out[k] = val
 }
 
 // expandRecipeVars resolves the moustache placeholders that can appear in a

@@ -1048,3 +1048,38 @@ func TestPickVersionForTriesEveryTagSpelling(t *testing.T) {
 		t.Error("a platform no spelling carries must still fail")
 	}
 }
+
+// TestFetchRuntimeEnvPlatformSupplements: inside a platform block a LIST
+// supplements what the flat block set, while a scalar replaces it.
+//
+// That rule is libpkgx's, not a guess — platform_reduce says
+//
+//	// if user specifies an array then we assume we are supplementing
+//	// otherwise we are replacing.
+//
+// and I had it replacing in both cases until I read the reference.
+func TestFetchRuntimeEnvPlatformSupplements(t *testing.T) {
+	osn, arch := HostSlug()
+	yml := "runtime:\n  env:\n" +
+		"    CFLAGS: \"-O2\"\n" +
+		"    REPLACED: \"flat\"\n" +
+		"    " + osn + ":\n" +
+		"      CFLAGS:\n        - \"-fPIC\"\n" +
+		"      REPLACED: \"platform\"\n" +
+		"provides:\n  - bin/x\n"
+	defer fakeServer(t, map[string]fakePkg{
+		"supp.test": {versions: []string{"1.0.0"}, yaml: yml},
+	})()
+
+	env, err := FetchRuntimeEnv("supp.test", "/opt/s", "1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env["CFLAGS"] != "-O2 -fPIC" {
+		t.Errorf("a list must supplement: CFLAGS = %q, want %q", env["CFLAGS"], "-O2 -fPIC")
+	}
+	if env["REPLACED"] != "platform" {
+		t.Errorf("a scalar must replace: REPLACED = %q, want %q", env["REPLACED"], "platform")
+	}
+	_ = arch
+}
