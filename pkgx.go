@@ -1172,7 +1172,11 @@ func setEnv(out map[string]string, k string, v any, prefix, version string, supp
 	case []any:
 		parts := make([]string, 0, len(t))
 		for _, e := range t {
-			parts = append(parts, expandRecipeVars(fmt.Sprint(e), prefix, version))
+			p, ok := resolvedOrEmpty(fmt.Sprint(e), prefix, version)
+			if !ok {
+				return // one unresolved element makes the whole value wrong
+			}
+			parts = append(parts, p)
 		}
 		val = strings.Join(parts, " ")
 	case nil:
@@ -1180,7 +1184,11 @@ func setEnv(out map[string]string, k string, v any, prefix, version string, supp
 	case map[string]any:
 		return // a map that is not a platform block is not a value
 	default:
-		val = expandRecipeVars(fmt.Sprint(t), prefix, version)
+		v, ok := resolvedOrEmpty(fmt.Sprint(t), prefix, version)
+		if !ok {
+			return
+		}
+		val = v
 	}
 	if supplement && out[k] != "" {
 		out[k] += " " + val
@@ -1225,6 +1233,52 @@ func expandRecipeVars(s, prefix, version string) string {
 		"{{ version.marketing }}", verPart(v, 0)+"."+verPart(v, 1),
 	)
 	return moustacheLeftovers.ReplaceAllString(rep.Replace(s), "")
+}
+
+// expandRecipeVarsRaw is expandRecipeVars without the final sweep, so a caller
+// can see whether a placeholder it does not know survived.
+func expandRecipeVarsRaw(s, prefix, version string) string {
+	s = strings.ReplaceAll(s, "${{", "{{")
+	v := ParseVer(version)
+	return strings.NewReplacer(
+		"{{prefix}}", prefix,
+		"{{ prefix }}", prefix,
+		"{{version}}", version,
+		"{{ version }}", version,
+		"{{version.raw}}", version,
+		"{{ version.raw }}", version,
+		"{{version.major}}", verPart(v, 0),
+		"{{ version.major }}", verPart(v, 0),
+		"{{version.minor}}", verPart(v, 1),
+		"{{ version.minor }}", verPart(v, 1),
+		"{{version.marketing}}", verPart(v, 0)+"."+verPart(v, 1),
+		"{{ version.marketing }}", verPart(v, 0)+"."+verPart(v, 1),
+	).Replace(s)
+}
+
+// resolvedOrEmpty returns the expansion, and false when a placeholder we do not
+// know survived it.
+//
+// Dropping the unknown one and keeping the rest is what we used to do, and it
+// FABRICATES a path. rust-lang.org/cargo declares
+//
+//	CARGO_INSTALL_ROOT: ${{home}}/.local
+//	CARGO_HTTP_CAINFO: ${{deps.curl.se/ca-certs.prefix}}/ssl/cert.pem
+//
+// and we exported `CARGO_INSTALL_ROOT=/.local` and
+// `CARGO_HTTP_CAINFO=/ssl/cert.pem` — two absolute paths that exist nowhere,
+// pointing the TLS trust store at nothing, with no error anywhere.
+//
+// libpkgx's useMoustaches `apply()` only substitutes tokens it has, so an
+// unknown one survives VERBATIM rather than being deleted. Leaving `{{home}}`
+// in an environment variable is no better for us, so the variable is dropped
+// instead: absent is a condition a caller can notice, wrong is not.
+func resolvedOrEmpty(s, prefix, version string) (string, bool) {
+	out := expandRecipeVarsRaw(s, prefix, version)
+	if moustacheLeftovers.MatchString(out) {
+		return "", false
+	}
+	return out, true
 }
 
 // verPart returns the i-th numeric component of a version, or "0".

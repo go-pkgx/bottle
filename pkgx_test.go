@@ -1141,3 +1141,42 @@ func TestInstallForBottlePublishedUnderAnotherSpelling(t *testing.T) {
 		t.Errorf("canonical spelling does not resolve: %v", err)
 	}
 }
+
+// TestFetchRuntimeEnvDropsUnresolvable: a value whose placeholder we cannot
+// resolve is DROPPED, not truncated.
+//
+// rust-lang.org/cargo declares
+//
+//	CARGO_INSTALL_ROOT: ${{home}}/.local
+//	CARGO_HTTP_CAINFO: ${{deps.curl.se/ca-certs.prefix}}/ssl/cert.pem
+//
+// and deleting the unknown placeholder exported `CARGO_INSTALL_ROOT=/.local`
+// and `CARGO_HTTP_CAINFO=/ssl/cert.pem` — two absolute paths that exist nowhere,
+// one of them the TLS trust store, with no error raised anywhere.
+//
+// libpkgx's useMoustaches only substitutes tokens it has, so an unknown one
+// survives verbatim. Absent is a condition a caller can notice; wrong is not.
+func TestFetchRuntimeEnvDropsUnresolvable(t *testing.T) {
+	yml := "runtime:\n  env:\n" +
+		"    GOOD: \"{{prefix}}/lib\"\n" +
+		"    HOMEISH: \"${{home}}/.local\"\n" +
+		"    DEPPY: \"${{deps.curl.se/ca-certs.prefix}}/ssl/cert.pem\"\n" +
+		"    LISTY:\n      - \"{{prefix}}/a\"\n      - \"${{home}}/b\"\n" +
+		"provides:\n  - bin/x\n"
+	defer fakeServer(t, map[string]fakePkg{
+		"drop.test": {versions: []string{"1.0.0"}, yaml: yml},
+	})()
+
+	env, err := FetchRuntimeEnv("drop.test", "/opt/d", "1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env["GOOD"] != "/opt/d/lib" {
+		t.Errorf("GOOD = %q", env["GOOD"])
+	}
+	for _, k := range []string{"HOMEISH", "DEPPY", "LISTY"} {
+		if v, ok := env[k]; ok {
+			t.Errorf("%s should have been dropped, got %q", k, v)
+		}
+	}
+}
