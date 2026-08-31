@@ -1101,6 +1101,52 @@ type runtimeYML struct {
 // placeholders resolved against the version actually installed. A project that
 // declares none yields an empty map, not an error.
 func FetchRuntimeEnv(project, prefix, version string) (map[string]string, error) {
+	return fetchRuntimeEnv(project, prefix, version, nil)
+}
+
+// FetchRuntimeEnvIn is FetchRuntimeEnv with the resolved closure in hand, so
+// `deps.<project>.prefix` and the dep version tokens resolve.
+//
+// libpkgx's useMoustaches tokenises, for every installed dependency:
+//
+//	map.push({ from: `deps.${dep.pkg.project}.prefix`, to: dep.path.string })
+//	map.push(...tokenize.version(dep.pkg.version, `deps.${dep.pkg.project}.version`))
+//
+// Without them rust-lang.org/cargo declares
+//
+//	CARGO_HTTP_CAINFO: ${{deps.curl.se/ca-certs.prefix}}/ssl/cert.pem
+//
+// and cargo builds with no CA bundle at all — `[77] Problem with the SSL CA
+// cert … error setting certificate file: /ssl/cert.pem` — which is where the
+// whole crates.io family stopped.
+func FetchRuntimeEnvIn(project string, closure []Resolved, dir string) (map[string]string, error) {
+	var version string
+	for _, r := range closure {
+		if r.Project == project {
+			version = r.Version.Raw
+			break
+		}
+	}
+	return fetchRuntimeEnv(project, PrefixOf(project, closure, dir), version, depTokens(closure, dir))
+}
+
+// depTokens builds the `deps.<project>.*` substitutions for a closure.
+func depTokens(closure []Resolved, dir string) map[string]string {
+	m := make(map[string]string, len(closure)*6)
+	for _, r := range closure {
+		p := "deps." + r.Project
+		v := r.Version
+		m[p+".prefix"] = filepath.Join(dir, r.Project, "v"+v.Raw)
+		m[p+".version"] = v.Raw
+		m[p+".version.raw"] = v.Raw
+		m[p+".version.major"] = verPart(v, 0)
+		m[p+".version.minor"] = verPart(v, 1)
+		m[p+".version.marketing"] = verPart(v, 0) + "." + verPart(v, 1)
+	}
+	return m
+}
+
+func fetchRuntimeEnv(project, prefix, version string, deps map[string]string) (map[string]string, error) {
 	body, err := fetchRecipe(project)
 	if err != nil {
 		return nil, err
@@ -1111,7 +1157,7 @@ func FetchRuntimeEnv(project, prefix, version string) (map[string]string, error)
 	}
 	out := make(map[string]string, len(y.Runtime.Env))
 	osn, arch := HostSlug()
-	flattenEnv(y.Runtime.Env, out, osn, arch, prefix, version)
+	flattenEnv(y.Runtime.Env, out, osn, arch, prefix, version, deps)
 	return out, nil
 }
 
@@ -1130,19 +1176,19 @@ func FetchRuntimeEnv(project, prefix, version string) (map[string]string, error)
 // so a list inside a platform block APPENDS to what the flat block set, while a
 // scalar replaces it. Reading that first would have saved a guess: I had it
 // replacing in both cases.
-func flattenEnv(in map[string]any, out map[string]string, osn, arch, prefix, version string) {
+func flattenEnv(in map[string]any, out map[string]string, osn, arch, prefix, version string, deps map[string]string) {
 	// Flat entries first, so a platform block supplements what they set —
 	// Go map iteration has no order of its own.
 	for k, v := range in {
 		if _, isPlatform := platformBlock(v, k, osn, arch); !isPlatform {
-			setEnv(out, k, v, prefix, version, false)
+			setEnv(out, k, v, prefix, version, deps, false)
 		}
 	}
 	for k, v := range in {
 		if blk, ok := platformBlock(v, k, osn, arch); ok {
 			for bk, bv := range blk {
 				_, supplement := bv.([]any)
-				setEnv(out, bk, bv, prefix, version, supplement)
+				setEnv(out, bk, bv, prefix, version, deps, supplement)
 			}
 		}
 	}
@@ -1166,13 +1212,13 @@ func platformBlock(v any, k, osn, arch string) (map[string]any, bool) {
 	return nil, false
 }
 
-func setEnv(out map[string]string, k string, v any, prefix, version string, supplement bool) {
+func setEnv(out map[string]string, k string, v any, prefix, version string, deps map[string]string, supplement bool) {
 	var val string
 	switch t := v.(type) {
 	case []any:
 		parts := make([]string, 0, len(t))
 		for _, e := range t {
-			p, ok := resolvedOrEmpty(fmt.Sprint(e), prefix, version)
+			p, ok := resolvedOrEmpty(fmt.Sprint(e), prefix, version, deps)
 			if !ok {
 				return // one unresolved element makes the whole value wrong
 			}
@@ -1184,7 +1230,7 @@ func setEnv(out map[string]string, k string, v any, prefix, version string, supp
 	case map[string]any:
 		return // a map that is not a platform block is not a value
 	default:
-		v, ok := resolvedOrEmpty(fmt.Sprint(t), prefix, version)
+		v, ok := resolvedOrEmpty(fmt.Sprint(t), prefix, version, deps)
 		if !ok {
 			return
 		}
@@ -1237,9 +1283,15 @@ func expandRecipeVars(s, prefix, version string) string {
 
 // expandRecipeVarsRaw is expandRecipeVars without the final sweep, so a caller
 // can see whether a placeholder it does not know survived.
-func expandRecipeVarsRaw(s, prefix, version string) string {
+func expandRecipeVarsRaw(s, prefix, version string, deps map[string]string) string {
 	s = strings.ReplaceAll(s, "${{", "{{")
 	v := ParseVer(version)
+	// Dependency tokens first: a project name can contain dots and slashes, so
+	// they are matched literally rather than by pattern.
+	for k, val := range deps {
+		s = strings.ReplaceAll(s, "{{"+k+"}}", val)
+		s = strings.ReplaceAll(s, "{{ "+k+" }}", val)
+	}
 	return strings.NewReplacer(
 		"{{prefix}}", prefix,
 		"{{ prefix }}", prefix,
@@ -1273,8 +1325,8 @@ func expandRecipeVarsRaw(s, prefix, version string) string {
 // unknown one survives VERBATIM rather than being deleted. Leaving `{{home}}`
 // in an environment variable is no better for us, so the variable is dropped
 // instead: absent is a condition a caller can notice, wrong is not.
-func resolvedOrEmpty(s, prefix, version string) (string, bool) {
-	out := expandRecipeVarsRaw(s, prefix, version)
+func resolvedOrEmpty(s, prefix, version string, deps map[string]string) (string, bool) {
+	out := expandRecipeVarsRaw(s, prefix, version, deps)
 	if moustacheLeftovers.MatchString(out) {
 		return "", false
 	}

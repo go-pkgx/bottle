@@ -1180,3 +1180,54 @@ func TestFetchRuntimeEnvDropsUnresolvable(t *testing.T) {
 		}
 	}
 }
+
+// TestFetchRuntimeEnvInResolvesDepTokens: `deps.<project>.prefix` and the dep
+// version tokens, which libpkgx's useMoustaches has and we did not.
+//
+// rust-lang.org/cargo declares
+//
+//	CARGO_HTTP_CAINFO: ${{deps.curl.se/ca-certs.prefix}}/ssl/cert.pem
+//
+// and without the token cargo built with no CA bundle:
+//
+//	[77] Problem with the SSL CA cert … error setting certificate file: /ssl/cert.pem
+//
+// A project name carries dots and slashes, so the token is matched literally —
+// `curl.se/ca-certs` must not be read as a pattern.
+func TestFetchRuntimeEnvInResolvesDepTokens(t *testing.T) {
+	yml := "runtime:\n  env:\n" +
+		"    CAINFO: \"${{deps.curl.se/ca-certs.prefix}}/ssl/cert.pem\"\n" +
+		"    DEPVER: \"{{deps.curl.se/ca-certs.version.marketing}}\"\n" +
+		"    OWN: \"{{prefix}}/bin\"\n" +
+		"provides:\n  - bin/x\n"
+	defer fakeServer(t, map[string]fakePkg{
+		"dep.test": {versions: []string{"2.0.0"}, yaml: yml},
+	})()
+
+	closure := []Resolved{
+		{Project: "dep.test", Version: ParseVer("2.0.0")},
+		{Project: "curl.se/ca-certs", Version: ParseVer("2026.8.13")},
+	}
+	env, err := FetchRuntimeEnvIn("dep.test", closure, "/pkgx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, want := range map[string]string{
+		"CAINFO": "/pkgx/curl.se/ca-certs/v2026.8.13/ssl/cert.pem",
+		"DEPVER": "2026.8",
+		"OWN":    "/pkgx/dep.test/v2.0.0/bin",
+	} {
+		if env[k] != want {
+			t.Errorf("%s = %q, want %q", k, env[k], want)
+		}
+	}
+
+	// Without the closure the value is still DROPPED rather than truncated.
+	env2, err := FetchRuntimeEnv("dep.test", "/pkgx/dep.test/v2.0.0", "2.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, ok := env2["CAINFO"]; ok {
+		t.Errorf("without deps CAINFO should be dropped, got %q", v)
+	}
+}
