@@ -889,15 +889,59 @@ func InstallFor(r Resolved, pkgxDir, osn, arch string) (bool, error) {
 	if err := os.MkdirAll(filepath.Dir(prefix), 0o755); err != nil {
 		return false, err
 	}
-	if err := os.Rename(filepath.Join(tmp, r.Project, "v"+r.Version.Raw), prefix); err != nil {
+	// The directory INSIDE the bottle is named after the tag it was published
+	// under, which is not always how we spell the version: gnu.org/tar is
+	// published as `1.35` for linux and `1.35.0` for darwin, so a bottle pulled
+	// from the linux tag unpacks to v1.35 while the resolved version reads
+	// 1.35.0, and the install died with
+	//   rename /pkgx/.tmp-…/gnu.org/tar/v1.35.0 …: no such file or directory
+	// Install under the name the bottle carries — absolute paths baked inside it
+	// point there — and link the canonical spelling to it.
+	src, alias := extractedPrefix(tmp, r)
+	dest := filepath.Join(pkgxDir, r.Project, filepath.Base(src))
+	if err := os.Rename(src, dest); err != nil {
 		// Another concurrent worker may have installed it meanwhile.
-		if st, e := os.Stat(prefix); e == nil && st.IsDir() {
+		if st, e := os.Stat(dest); e == nil && st.IsDir() {
 			return false, nil
 		}
 		return false, err
 	}
+	if alias {
+		_ = os.Remove(prefix)
+		_ = os.Symlink(filepath.Base(src), prefix)
+	}
 	writeVersionLinks(pkgxDir, r)
 	return true, nil
+}
+
+// extractedPrefix returns the versioned directory the bottle actually unpacked,
+// and whether it differs from the canonical `v<version>` spelling. Preferring
+// the canonical name keeps the ordinary case exact; falling back to the single
+// `v*` directory present handles a bottle published under another spelling of
+// the same version. Two candidates is not a case to guess at.
+func extractedPrefix(tmp string, r Resolved) (path string, aliased bool) {
+	canonical := filepath.Join(tmp, r.Project, "v"+r.Version.Raw)
+	if st, err := os.Stat(canonical); err == nil && st.IsDir() {
+		return canonical, false
+	}
+	ents, err := os.ReadDir(filepath.Join(tmp, r.Project))
+	if err != nil {
+		return canonical, false // let the rename report the real problem
+	}
+	var found string
+	for _, e := range ents {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "v") {
+			continue
+		}
+		if found != "" {
+			return canonical, false // ambiguous: do not guess
+		}
+		found = e.Name()
+	}
+	if found == "" {
+		return canonical, false
+	}
+	return filepath.Join(tmp, r.Project, found), true
 }
 
 // verifyPulled enforces the fail-closed signature check on a pulled bottle.

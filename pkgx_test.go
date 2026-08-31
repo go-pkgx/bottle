@@ -1083,3 +1083,61 @@ func TestFetchRuntimeEnvPlatformSupplements(t *testing.T) {
 	}
 	_ = arch
 }
+
+// makeGzTarballAt builds a REAL tar.gz holding one file at the given path —
+// makeGzTarball only gzips a marker, which is enough for transport tests and not
+// for one that unpacks.
+func makeGzTarballAt(path, body string) []byte {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	_ = tw.WriteHeader(&tar.Header{Name: path, Mode: 0o755, Size: int64(len(body)), Typeflag: tar.TypeReg})
+	_, _ = tw.Write([]byte(body))
+	_ = tw.Close()
+	_ = gz.Close()
+	return buf.Bytes()
+}
+
+// TestInstallForBottlePublishedUnderAnotherSpelling: the directory INSIDE a
+// bottle is named after the tag it was published under, which is not always how
+// we spell the version. gnu.org/tar is `1.35` for linux and `1.35.0` for darwin,
+// so the linux bottle unpacks to v1.35 while the resolved version reads 1.35.0
+// and the install died with
+//
+//	rename /pkgx/.tmp-…/gnu.org/tar/v1.35.0 …: no such file or directory
+//
+// after PickVersionFor had correctly found the linux tag.
+func TestInstallForBottlePublishedUnderAnotherSpelling(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	base := fr.base("go-pkgx/bottles")
+	old := DistBase
+	DistBase = base
+	resetOCICache()
+	t.Setenv("PKGX_VERIFY", "0")
+	t.Cleanup(func() { DistBase = old; resetOCICache() })
+
+	c, err := NewOCIClient(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A bottle whose payload is spelled v1.35, published under tag 1.35.
+	if _, err := c.PushWithReferrers("t.test", "1.35", "linux", "x86-64",
+		makeGzTarballAt("t.test/v1.35/bin/t", "x"), ".tar.gz", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	r := Resolved{Project: "t.test", Version: ParseVer("1.35.0")}
+	r.Version.Tag = "1.35"
+	if _, err := InstallFor(r, dir, "linux", "x86-64"); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	// Installed under the name the bottle carries…
+	if st, err := os.Stat(filepath.Join(dir, "t.test", "v1.35", "bin", "t")); err != nil || st.IsDir() {
+		t.Errorf("payload not installed under its own name: %v", err)
+	}
+	// …and reachable under the canonical spelling.
+	if _, err := os.Stat(filepath.Join(dir, "t.test", "v1.35.0", "bin", "t")); err != nil {
+		t.Errorf("canonical spelling does not resolve: %v", err)
+	}
+}
