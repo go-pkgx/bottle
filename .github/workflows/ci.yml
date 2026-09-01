@@ -65,7 +65,7 @@ jobs:
           go-version: stable
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 24
       - name: go test (js/wasm)
         env:
           GOOS: js
