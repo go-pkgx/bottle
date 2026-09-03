@@ -5,7 +5,7 @@ go 1.26.4
 require (
 	github.com/go-attest/sign v0.1.0
 	github.com/hashicorp/hcl/v2 v2.24.0
-	github.com/klauspost/compress v1.19.2
+	github.com/klauspost/compress v1.20.0
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/ulikunitz/xz v0.5.16
