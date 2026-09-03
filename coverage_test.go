@@ -261,6 +261,7 @@ func TestFindLoaderUnmappedArch(t *testing.T) {
 }
 
 func TestSetupScratchRootfs(t *testing.T) {
+	skipOnWASI(t, wasiNoSymlink)
 	// Pin a mapped arch instead of trusting the host to have one: on
 	// GOARCH=wasm LoaderName() is "" and the loop under test never runs, so
 	// this asserted nothing there and failed on the symlink it expected.
@@ -756,6 +757,7 @@ func TestInstallOverOCIGzAndXz(t *testing.T) {
 }
 
 func TestInstallOverOCIErrors(t *testing.T) {
+	skipOnWASI(t, wasiNoChmod)
 	// Decode/extract errors on unsigned fixtures: without the opt-out the
 	// fail-closed check refuses them first and none of these branches is reached.
 	t.Setenv("PKGX_VERIFY", "0")
