@@ -32,6 +32,16 @@ jobs:
             goarch: riscv64
           - goos: linux
             goarch: ppc64le
+          - goos: linux
+            goarch: loong64
+          # s390x is BIG-ENDIAN, and this package reads binary formats it did
+          # not write: ELF and Mach-O headers, OCI manifests, tar and xz
+          # streams. Every one of those is little-endian on the wire, so any
+          # place that reads an integer through unsafe or through the host's
+          # byte order rather than through encoding/binary is wrong there and
+          # nowhere else.
+          - goos: linux
+            goarch: s390x
           # wasm is a real target for this package, not a curiosity: a browser
           # that installs a signed bottle into its own store runs THIS code.
           - goos: js
@@ -69,6 +79,73 @@ jobs:
       - name: go test (js/wasm)
         env:
           GOOS: js
+          GOARCH: wasm
+        run: |
+          echo "$(go env GOROOT)/lib/wasm" >> "$GITHUB_PATH"
+          PATH="$PATH:$(go env GOROOT)/lib/wasm" go test -count=1 ./...
+
+  emulated:
+    name: test (${{ matrix.goarch }}, qemu)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: arm64
+            qemu: qemu-aarch64-static
+          - goarch: riscv64
+            qemu: qemu-riscv64-static
+          - goarch: ppc64le
+            qemu: qemu-ppc64le-static
+          - goarch: s390x
+            qemu: qemu-s390x-static
+          - goarch: loong64
+            qemu: qemu-loongarch64-static
+    # Cross-COMPILING proves the code builds for an architecture. It says
+    # nothing about whether it WORKS there — and the bugs this package can have
+    # are exactly the ones a compiler cannot see: a wrong byte order, an
+    # unaligned load, an int that is not the width somebody assumed.
+    #
+    # So run the suite under qemu-user. It is slow and it is the point.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: qemu-user
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user-static
+          # Named, not assumed: a missing emulator would otherwise look like a
+          # test failure on the architecture rather than a missing tool.
+          command -v ${{ matrix.qemu }} || {
+            echo "::error::${{ matrix.qemu }} is not in this image" >&2; exit 1; }
+      - name: go test
+        env:
+          CGO_ENABLED: "0"
+          GOARCH: ${{ matrix.goarch }}
+          GOOS: linux
+        # -count=1 so a cached PASS from the host architecture cannot stand in
+        # for a run that never happened under emulation.
+        run: go test -count=1 -exec ${{ matrix.qemu }} ./...
+
+  wasip1:
+    name: test (wasip1/wasm, wasmtime)
+    runs-on: ubuntu-latest
+    # The other wasm lane runs under node, which gives Go's js/wasm port the
+    # browser's fetch() and fs. wasip1 is a DIFFERENT port with a different
+    # syscall surface — no network at all, and a filesystem only where one is
+    # granted. A package that installs bottles has to know which of the two it
+    # is on, and the only way to know it does is to run there.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - uses: bytecodealliance/actions/wasmtime/setup@v1
+      - name: go test (wasip1/wasm)
+        env:
+          GOOS: wasip1
           GOARCH: wasm
         run: |
           echo "$(go env GOROOT)/lib/wasm" >> "$GITHUB_PATH"
