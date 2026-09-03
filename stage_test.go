@@ -129,6 +129,7 @@ func TestFindLoaderForTargetArch(t *testing.T) {
 // TestSetupScratchRootfsAtTargetLoader ties the pieces together: the staged
 // rootfs must carry /lib and /lib64 symlinks named for the TARGET.
 func TestSetupScratchRootfsAtTargetLoader(t *testing.T) {
+	skipOnWASI(t, wasiNoSymlink)
 	root := t.TempDir()
 	target := "/pkgx/" + GlibcProject + "/v2.44.0/lib/glibc-2.44/ld-linux-x86-64.so.2"
 

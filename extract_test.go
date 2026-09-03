@@ -61,6 +61,7 @@ func extract(data []byte, dest string, strip int) error {
 // TestExtractHappyPath covers dir, regular file, symlink and hard link, with
 // permission fallback and mtime restoration.
 func TestExtractHappyPath(t *testing.T) {
+	skipOnWASI(t, wasiNoChmod)
 	dest := t.TempDir()
 	mt := time.Unix(1_600_000_000, 0)
 	data := buildExtractTar(t, []tarEntry{

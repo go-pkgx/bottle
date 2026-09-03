@@ -131,6 +131,7 @@ func TestIsELF(t *testing.T) {
 // writes the same loader and /bin/sh into a staging directory instead, for the
 // TARGET architecture, which need not be the host's.
 func TestSetupScratchRootfsAt(t *testing.T) {
+	skipOnWASI(t, wasiNoSymlink)
 	root := t.TempDir()
 	name := LoaderNameFor("x86-64")
 	if name != "ld-linux-x86-64.so.2" {
