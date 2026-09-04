@@ -821,13 +821,19 @@ func TestInstallOverOCIErrors(t *testing.T) {
 		t.Error("expected MkdirAll(pkgxDir) error")
 	}
 	// pkgxDir exists but is unwritable -> MkdirTemp error.
-	noWrite := filepath.Join(t.TempDir(), "ro")
-	if err := os.Mkdir(noWrite, 0o500); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(noWrite, 0o755) })
-	if _, err := Install(Resolved{"ok.pkg", ParseVer("1.0.0")}, noWrite); err == nil {
-		t.Error("expected MkdirTemp error in a read-only pkgxDir")
+	//
+	// Only askable of a user that permission bits apply to: root is not refused
+	// by one, so under a VM or a container that runs as root this reads as a
+	// defect in Install rather than as a question that could not be posed.
+	if os.Geteuid() != 0 {
+		noWrite := filepath.Join(t.TempDir(), "ro")
+		if err := os.Mkdir(noWrite, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(noWrite, 0o755) })
+		if _, err := Install(Resolved{"ok.pkg", ParseVer("1.0.0")}, noWrite); err == nil {
+			t.Error("expected MkdirTemp error in a read-only pkgxDir")
+		}
 	}
 	// <pkgxDir>/<project> pre-created as a FILE -> MkdirAll(dir(prefix)) error.
 	pd := t.TempDir()
