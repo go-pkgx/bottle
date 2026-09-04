@@ -31,13 +31,30 @@ var (
 	DistBase   = "oci://ghcr.io/go-pkgx/packages"
 	PantryBase = "https://raw.githubusercontent.com/pkgxdev/pantry/main/projects"
 
-	// PantryOverlay (PKGX_PANTRY_OVERLAY), when set, is consulted for a project's
-	// package.yml BEFORE PantryBase, falling back to PantryBase when the overlay
-	// has no recipe for that project. This lets a small curated overlay carry
-	// corrected recipes (e.g. a stale `openssl.org: ^1.1` bumped to a modern
-	// constraint that matches the published bottles) without forking the whole
-	// pantry — everything the overlay does not override resolves upstream.
-	PantryOverlay = ""
+	// PantryOverlay is consulted for a project's package.yml BEFORE PantryBase,
+	// falling back to PantryBase when the overlay has no recipe for that
+	// project. A small curated overlay can then carry corrected recipes (e.g. a
+	// stale `openssl.org: ^1.1` bumped to a constraint that matches the
+	// published bottles) without forking the whole pantry — everything it does
+	// not override still resolves upstream.
+	//
+	// It defaults to OUR overlay because DistBase defaults to OUR registry, and
+	// the two have to agree. They did not, and the disagreement was silent:
+	//
+	//	$ pkgm install rust-lang.org/cargo      # defaults, darwin/aarch64
+	//	$ cargo --version
+	//	$ echo $?
+	//	137
+	//
+	// The published cargo links openssl 3, and says so — `@rpath/openssl.org/
+	// v3.6.4/lib/libssl.3.dylib`. Upstream's recipe does not mention openssl at
+	// all, so the resolver installed 1.1.1w (pulled in by libssh2) and the
+	// binary died on a library nothing had installed. The corrected recipe was
+	// in the overlay the whole time, and nothing consulted it.
+	//
+	// PKGX_PANTRY_OVERLAY overrides it; "none" turns it off and resolves
+	// everything upstream.
+	PantryOverlay = "https://raw.githubusercontent.com/go-pkgx/pantry-overlay/main/projects"
 
 	// UpstreamDist is the canonical pkgx distribution used to list versions for
 	// projects that are not (yet) published to an OCI DistBase — typically
@@ -112,8 +129,15 @@ func applyEnv(get func(string) string) {
 	if p := get("PKGX_PANTRY"); p != "" {
 		PantryBase = strings.TrimRight(p, "/")
 	}
+	// "none" is how a caller says "no overlay": an empty value cannot mean it,
+	// because an unset variable and one set to nothing are the same string here,
+	// and defaulting on an unset variable is the whole point.
 	if p := get("PKGX_PANTRY_OVERLAY"); p != "" {
-		PantryOverlay = strings.TrimRight(p, "/")
+		if p == "none" {
+			PantryOverlay = ""
+		} else {
+			PantryOverlay = strings.TrimRight(p, "/")
+		}
 	}
 	if c := get("PKGX_CACHE"); c != "" {
 		CacheBase = strings.TrimRight(c, "/")

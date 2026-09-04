@@ -640,6 +640,43 @@ func TestApplyEnvOverlay(t *testing.T) {
 	}
 }
 
+// The overlay defaults ON, and to OUR overlay, because DistBase defaults to OUR
+// registry and the two have to agree. They did not, and it was silent: the
+// published cargo links openssl 3 and says so, upstream's recipe does not
+// mention openssl at all, so a default `pkgm install rust-lang.org/cargo`
+// installed 1.1.1w and the binary died on a library nothing had installed —
+// with the corrected recipe sitting in the overlay, unread.
+func TestOverlayDefaultsToOurs(t *testing.T) {
+	ob := PantryOverlay
+	defer func() { PantryOverlay = ob }()
+	PantryOverlay = "https://raw.githubusercontent.com/go-pkgx/pantry-overlay/main/projects"
+	applyEnv(func(string) string { return "" })
+	if PantryOverlay == "" {
+		t.Fatal("an unset PKGX_PANTRY_OVERLAY turned the overlay off")
+	}
+	if !strings.Contains(PantryOverlay, "go-pkgx/pantry-overlay") {
+		t.Errorf("PantryOverlay = %q, want our overlay", PantryOverlay)
+	}
+}
+
+// "none" is how a caller says no overlay. An empty value cannot mean it: an
+// unset variable and one set to nothing are the same string here, and
+// defaulting on an unset variable is the whole point.
+func TestOverlayCanBeTurnedOff(t *testing.T) {
+	ob := PantryOverlay
+	defer func() { PantryOverlay = ob }()
+	PantryOverlay = "https://ov.example/projects"
+	applyEnv(func(k string) string {
+		if k == "PKGX_PANTRY_OVERLAY" {
+			return "none"
+		}
+		return ""
+	})
+	if PantryOverlay != "" {
+		t.Errorf("PantryOverlay = %q, want it off", PantryOverlay)
+	}
+}
+
 // TestFetchRuntimeEnv: a package declaring `runtime: env:` is declaring what its
 // CONSUMERS need. help2man bundles the perl module Locale::gettext into its own
 // prefix and publishes PERL5LIB so it is findable; without that export it dies
