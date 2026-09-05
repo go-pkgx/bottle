@@ -119,7 +119,7 @@ jobs:
     # So run the suite under qemu-user. It is slow and it is the point.
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: stable
       - name: qemu-user
@@ -149,7 +149,7 @@ jobs:
     # is on, and the only way to know it does is to run there.
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: stable
       - uses: bytecodealliance/actions/wasmtime/setup@v1
@@ -175,7 +175,7 @@ jobs:
     # build here, run there, the VM supplying only a kernel and a libc.
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with: { go-version: stable }
       - name: cross-compile the test binaries
         run: .github/scripts/bsd-tests.sh build freebsd
@@ -190,7 +190,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with: { go-version: stable }
       - name: cross-compile the test binaries
         run: .github/scripts/bsd-tests.sh build netbsd
@@ -207,7 +207,7 @@ jobs:
     # policed. Code that merely happens to work elsewhere tends to stop here.
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with: { go-version: stable }
       - name: cross-compile the test binaries
         run: .github/scripts/bsd-tests.sh build openbsd
