@@ -118,7 +118,7 @@ jobs:
     #
     # So run the suite under qemu-user. It is slow and it is the point.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: stable
@@ -148,7 +148,7 @@ jobs:
     # granted. A package that installs bottles has to know which of the two it
     # is on, and the only way to know it does is to run there.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: stable
@@ -174,7 +174,7 @@ jobs:
     # package mirror happens to hold that day. Same idiom as the qemu lanes:
     # build here, run there, the VM supplying only a kernel and a libc.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with: { go-version: stable }
       - name: cross-compile the test binaries
@@ -189,7 +189,7 @@ jobs:
     name: test (NetBSD, a kernel that is not Linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with: { go-version: stable }
       - name: cross-compile the test binaries
@@ -206,7 +206,7 @@ jobs:
     # is deliberately hostile (junk-filling, guard pages), and syscall origin is
     # policed. Code that merely happens to work elsewhere tends to stop here.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with: { go-version: stable }
       - name: cross-compile the test binaries
