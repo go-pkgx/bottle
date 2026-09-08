@@ -145,6 +145,31 @@ func implicitRoots(needed map[string]bool) map[string]string {
 	return roots
 }
 
+// hostProvidedSonames are libraries that come from the MACHINE and never from a
+// bottle.
+//
+// A GPU driver's userspace half is versioned in lockstep with the kernel module
+// it talks to, and is installed by whoever installed the driver. Shipping a copy
+// would be wrong even where it is allowed — a mismatched libcuda and kernel
+// module do not work together — and NVIDIA's is not redistributable anyway. The
+// cudart bottle carries lib/stubs/libcuda.so purely so that a LINK succeeds; the
+// real library is resolved at run time, and on a machine with no GPU the module
+// that needs it declines to load, which is the correct outcome rather than a
+// failure.
+//
+// Without this list such a soname reads as a hole in the packaging — "no pkgx
+// project is mapped to that soname" — on every install of anything that links a
+// GPU transport. It is not a hole. It is the boundary.
+var hostProvidedSonames = []string{
+	"libcuda.so",      // NVIDIA driver API (the stub in cuda-cudart is link-time only)
+	"libnvidia-ml.so", // NVML, shipped with the same driver
+}
+
+// isHostProvidedSoname reports whether a soname is one the machine provides.
+func isHostProvidedSoname(soname string) bool {
+	return matchesAny(map[string]bool{soname: true}, hostProvidedSonames)
+}
+
 // isImplicitSoname reports whether a soname belongs to one of the implicit
 // system groups — glibc, the libstdc++/libgcc pair, the gcc runtime libs. Those
 // are the implicit block's business, and it installs them from their project
@@ -268,6 +293,13 @@ func CompleteClosure(roots map[string]string, dir string) ([]Resolved, error) {
 			// binary needs libxml2.so.2). Pull the exact-soname version too;
 			// both lib dirs sit on LD_LIBRARY_PATH and each soname resolves.
 			triedSoname[soname] = true // once per soname, so a warning is said once
+			if isHostProvidedSoname(soname) {
+				// Said once, and said as what it is: a fact about where this
+				// library comes from, not a gap in the closure.
+				warn("%s comes from the machine's GPU driver rather than from a bottle; "+
+					"what needs it will load only where a driver is installed", soname)
+				continue
+			}
 			r, ok := provideSoname(soname, dir)
 			if !ok {
 				continue
