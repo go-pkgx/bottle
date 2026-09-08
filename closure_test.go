@@ -263,3 +263,23 @@ func TestIsImplicitSoname(t *testing.T) {
 		}
 	}
 }
+
+// TestHostProvidedSoname: a GPU driver's userspace half is not a hole in the
+// packaging, and must not be reported as one. UCX built --with-cuda links its
+// cuda module against the stub in the cudart bottle; the real libcuda.so.1
+// belongs to whoever installed the driver, and must match the kernel module it
+// talks to, so no bottle can or should provide it.
+func TestHostProvidedSoname(t *testing.T) {
+	for _, s := range []string{"libcuda.so.1", "libcuda.so", "libnvidia-ml.so.1"} {
+		if !isHostProvidedSoname(s) {
+			t.Errorf("%s should be host-provided", s)
+		}
+	}
+	// Not a licence to swallow anything cuda-shaped: cudart IS a bottle, and a
+	// missing one is a real gap that must still be reported.
+	for _, s := range []string{"libcudart.so.13", "libz.so.1", "libhsa-runtime64.so.1"} {
+		if isHostProvidedSoname(s) {
+			t.Errorf("%s must not be treated as host-provided", s)
+		}
+	}
+}
