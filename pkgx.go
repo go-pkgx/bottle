@@ -729,7 +729,56 @@ func DownloadBottle(project, ver, osn, arch string) ([]byte, string, error) {
 
 type pkgYML struct {
 	Dependencies map[string]yaml.Node `yaml:"dependencies"`
+	Companions   map[string]yaml.Node `yaml:"companions"`
 	Provides     yaml.Node            `yaml:"provides"`
+}
+
+// reduceDeps flattens a platform-keyed dependency map (`linux: {...}`,
+// `darwin/aarch64: {...}`) onto one os/arch, the shape both `dependencies` and
+// `companions` use.
+func reduceDeps(m map[string]yaml.Node, osn, arch string) map[string]string {
+	out := map[string]string{}
+	for k, node := range m {
+		if isPlatformKey(k) {
+			if platformMatches(k, osn, arch) {
+				var sub map[string]string
+				_ = node.Decode(&sub)
+				for pk, pv := range sub {
+					out[pk] = pv
+				}
+			}
+			continue
+		}
+		var s string
+		_ = node.Decode(&s)
+		out[k] = s
+	}
+	return out
+}
+
+// CompanionsFor returns a recipe's `companions:` for an explicit os/arch slug.
+//
+// A companion is not a dependency: the package works without it, and nothing
+// links against it. It is what the recipe says belongs in the same ENVIRONMENT,
+// and some packages are unusable without theirs — `rust-lang.org` ships
+// bin/cargo-clippy and bin/cargo-fmt and no `cargo` at all, because cargo is
+// the separate `rust-lang.org/cargo` project it names here.
+//
+// Reading it was the whole of issue #65: a recipe that declares
+// `rust-lang.org` and then runs `cargo` is correct against upstream pkgx and
+// died against ours with `"cargo": executable file not found in $PATH` — 74
+// pantry recipes declare the key, and 21 of those are named as a dependency by
+// some other recipe.
+func CompanionsFor(project, osn, arch string) (map[string]string, error) {
+	body, err := fetchRecipe(project)
+	if err != nil {
+		return nil, err
+	}
+	var y pkgYML
+	if err := yaml.Unmarshal(body, &y); err != nil {
+		return nil, fmt.Errorf("%s/package.yml: %w", project, err)
+	}
+	return reduceDeps(y.Companions, osn, arch), nil
 }
 
 // FetchMeta returns the host-relevant runtime dependencies (project ->
@@ -753,22 +802,7 @@ func FetchMetaFor(project, osn, arch string) (deps map[string]string, provides [
 	if err := yaml.Unmarshal(body, &y); err != nil {
 		return nil, nil, fmt.Errorf("%s/package.yml: %w", project, err)
 	}
-	deps = map[string]string{}
-	for k, node := range y.Dependencies {
-		if isPlatformKey(k) {
-			if platformMatches(k, osn, arch) {
-				var sub map[string]string
-				_ = node.Decode(&sub)
-				for pk, pv := range sub {
-					deps[pk] = pv
-				}
-			}
-			continue
-		}
-		var s string
-		_ = node.Decode(&s)
-		deps[k] = s
-	}
+	deps = reduceDeps(y.Dependencies, osn, arch)
 	provides = decodeProvides(y.Provides)
 	return deps, provides, nil
 }
