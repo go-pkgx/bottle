@@ -125,7 +125,7 @@ func extSafeTarget(dest, name string, strip int) (target string, ok bool, err er
 	if path.IsAbs(name) || filepath.IsAbs(filepath.FromSlash(name)) {
 		return "", false, fmt.Errorf("%w: %q", ErrInsecurePath, name)
 	}
-	parts := strings.Split(path.Clean(name), "/")
+	parts := stripComponents(name)
 	if len(parts) <= strip {
 		return "", false, nil
 	}
@@ -185,4 +185,33 @@ func extRestoreTime(path string, mt time.Time) error {
 		return nil
 	}
 	return extChtimes(path, mt, mt)
+}
+
+// stripComponents splits an archive member name the way `tar --strip-components`
+// counts it: a leading "." IS a component.
+//
+// `path.Clean` removes it before the count, so N components off a `./`-prefixed
+// archive strips N+1. That does not fail — it FLATTENS. `hdf5-2.2.0.tar.gz`
+// ships `./hdf5-2.2.0/…` and its recipe says `strip-components: 2`; the
+// top-level `CMakeLists.txt` was dropped and a subdirectory's namesake landed
+// in its place, which cmake reported as
+//
+//	CMake Error at CMakeLists.txt:152 (TARGET_C_PROPERTIES):
+//	  Unknown CMake command "TARGET_C_PROPERTIES".
+//
+// — line 152 of `testpar/CMakeLists.txt`, configured as if it were the root.
+// Measured against GNU tar on a `./top/sub/f` archive: `--strip-components=2`
+// yields `sub/f`, and this yielded `f`.
+//
+// Empty segments (from "//" or a trailing "/") are not components and are
+// dropped; "." is kept.
+func stripComponents(name string) []string {
+	raw := strings.Split(name, "/")
+	out := raw[:0]
+	for _, p := range raw {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
