@@ -755,9 +755,27 @@ func (c *OCIClient) platformManifests(ctx context.Context, repo *remote.Reposito
 			if !strings.HasPrefix(t, prefix) {
 				continue
 			}
-			desc, err := repo.Resolve(ctx, t)
+			desc, rc, err := repo.FetchReference(ctx, t)
 			if err != nil {
 				continue
+			}
+			// A resolved descriptor is BARE: mediaType, digest, size. Platform
+			// is restored from the tag below; artifactType and the annotations
+			// live in the manifest BODY, and upsertPlatform replaces a complete
+			// index entry with whatever this returns — so without them an index
+			// stops saying which of its entries are bottles, on every platform
+			// except the one being pushed.
+			body, rerr := orascontent.ReadAll(rc, desc)
+			rc.Close()
+			if rerr == nil {
+				var m struct {
+					ArtifactType string            `json:"artifactType"`
+					Annotations  map[string]string `json:"annotations"`
+				}
+				if json.Unmarshal(body, &m) == nil {
+					desc.ArtifactType = m.ArtifactType
+					desc.Annotations = m.Annotations
+				}
 			}
 			if desc.Platform == nil {
 				// Resolve returns a bare manifest descriptor, so the platform
