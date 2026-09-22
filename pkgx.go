@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,8 @@ import (
 	"time"
 
 	yaml "gopkg.in/yaml.v3"
+	"oras.land/oras-go/v2/errdef"
+	"oras.land/oras-go/v2/registry/remote/errcode"
 )
 
 // Base URLs for the pkgx distribution + pantry; overridable in tests, and at
@@ -463,6 +466,28 @@ func versionsForSourced(project, osn, arch string) ([]Ver, bool, error) {
 // not known to registry"), as opposed to a transient or auth error that should
 // propagate.
 func repoAbsent(err error) bool {
+	// The registry says what happened in a STATUS, and oras hands it to us
+	// typed. Ask that first: a 500 whose body happens to read "repository not
+	// found in cache" is not an absent repository, and reading it as one sends
+	// resolution quietly upstream — off our own registry — for as long as the
+	// upset lasts. Classifying a transport failure by the words in its message
+	// is how a transient error becomes a different, silent answer.
+	var resp *errcode.ErrorResponse
+	if errors.As(err, &resp) {
+		switch resp.StatusCode {
+		case http.StatusNotFound:
+			return true
+		case http.StatusForbidden:
+			return anonymousRead()
+		default:
+			return false
+		}
+	}
+	if errors.Is(err, errdef.ErrNotFound) {
+		return true
+	}
+	// Not an oras error: our own js/wasm client and the plain HTTP paths report
+	// in prose, so the text is all there is.
 	s := strings.ToLower(err.Error())
 	if strings.Contains(s, "name unknown") ||
 		strings.Contains(s, "not known to registry") ||

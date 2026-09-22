@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"github.com/go-attest/sign"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	yaml "gopkg.in/yaml.v3"
+	"oras.land/oras-go/v2/registry/remote/errcode"
 )
 
 // --- version parsing / comparison / constraints -----------------------------
@@ -1390,5 +1392,44 @@ func TestSplitComparators(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+// TestRepoAbsentClassifiesByStatus: "does this registry carry the project?" is
+// answered by the registry's STATUS, not by the words in its message. Reading
+// prose meant any transient failure whose body happened to contain "not found"
+// was taken for "we do not carry this package", and resolution fell back to the
+// UPSTREAM dist — silently off our own registry, for as long as the upset
+// lasted, with a different answer at the end of it.
+func TestRepoAbsentClassifiesByStatus(t *testing.T) {
+	resp := func(code int, msg string) error {
+		return &errcode.ErrorResponse{
+			StatusCode: code,
+			Errors:     errcode.Errors{errcode.Error{Code: "UNKNOWN", Message: msg}},
+		}
+	}
+	for _, tc := range []struct {
+		name  string
+		err   error
+		creds map[string]string
+		want  bool
+	}{
+		{name: "404 is an absent repository", err: resp(404, "name unknown"), want: true},
+		{name: "403 read anonymously is ghcr's absent repository", err: resp(403, "denied"), want: true},
+		{name: "403 with credentials is an access problem",
+			err: resp(403, "denied"), creds: map[string]string{"OCI_TOKEN": "t"}, want: false},
+		// the one the prose match got wrong
+		{name: "500 whose message says not found is not absent",
+			err: resp(500, "repository not found in cache"), want: false},
+		{name: "502 is not absent", err: resp(502, "bad gateway"), want: false},
+		{name: "a plain error still reads as prose", err: errors.New("name unknown"), want: true},
+		{name: "a plain transport error is not absent", err: errors.New("connection reset by peer"), want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withGlibcEnv(t, tc.creds)
+			if got := repoAbsent(tc.err); got != tc.want {
+				t.Errorf("repoAbsent(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
