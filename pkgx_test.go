@@ -184,8 +184,21 @@ func fakeServer(t *testing.T, pkgs map[string]fakePkg) func() {
 	// the install path enforces it too. Tests that exercise verification itself
 	// set PKGX_VERIFY back on explicitly.
 	t.Setenv("PKGX_VERIFY", "0")
+	// PantryOverlay defaults to the LIVE go-pkgx/pantry-overlay and is consulted
+	// BEFORE PantryBase, so leaving it set meant a fixture recipe was silently
+	// replaced by the real one for any project the overlay happens to carry.
+	// gnu.org/help2man entered the overlay on 2026-09-12 and TestFetchRuntimeEnv
+	// began reading that recipe instead of its own: the PERL5LIB assertion still
+	// passed (the fixture was copied from the real recipe) while the invented
+	// MAJOR key was simply absent. A test must not depend on another repository's
+	// contents, nor on the network being there.
+	overlay := PantryOverlay
+	PantryOverlay = ""
 	DistBase, PantryBase = srv.URL, srv.URL
-	return srv.Close
+	return func() {
+		PantryOverlay = overlay
+		srv.Close()
+	}
 }
 
 // makeBottleGz builds a gzip'd tar with the pkgx <project>/v<ver>/... layout.
@@ -1266,5 +1279,40 @@ func TestFetchRuntimeEnvInResolvesDepTokens(t *testing.T) {
 	}
 	if v, ok := env2["CAINFO"]; ok {
 		t.Errorf("without deps CAINFO should be dropped, got %q", v)
+	}
+}
+
+// TestFakeServerNeutralisesAmbientOverlay: PantryOverlay is a package-level
+// variable pointing at the live overlay by default, and fetchRecipe asks it
+// FIRST. A fixture served by fakeServer must win over whatever the ambient
+// overlay holds, or a test measures another repository's content instead of
+// its own — which is how TestFetchRuntimeEnv came to read the real
+// gnu.org/help2man recipe and lose the key it had invented.
+func TestFakeServerNeutralisesAmbientOverlay(t *testing.T) {
+	ambient := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "runtime:\n  env:\n    FROM: \"the ambient overlay\"\n")
+	}))
+	defer ambient.Close()
+
+	saved := PantryOverlay
+	PantryOverlay = ambient.URL
+	defer func() { PantryOverlay = saved }()
+
+	done := fakeServer(t, map[string]fakePkg{
+		"acme.org/tool": {
+			versions: []string{"1.0.0"},
+			yaml:     "runtime:\n  env:\n    FROM: \"the fixture\"\n",
+		},
+	})
+	env, err := FetchRuntimeEnv("acme.org/tool", "/p", "1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env["FROM"] != "the fixture" {
+		t.Errorf("FROM = %q, want the fixture: the ambient overlay answered", env["FROM"])
+	}
+	done()
+	if PantryOverlay != ambient.URL {
+		t.Errorf("PantryOverlay = %q after close, want it restored to %q", PantryOverlay, ambient.URL)
 	}
 }
