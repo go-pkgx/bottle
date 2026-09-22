@@ -1316,3 +1316,79 @@ func TestFakeServerNeutralisesAmbientOverlay(t *testing.T) {
 		t.Errorf("PantryOverlay = %q after close, want it restored to %q", PantryOverlay, ambient.URL)
 	}
 }
+
+// A compound constraint was not refused, it was silently read as a different
+// one: ParseVer swallows the second comparator and concatenates what follows.
+//
+//	ParseVer("3<3.12")    = [3 12]     -> ">=3<3.12"    read as ">=3.12"
+//	ParseVer("1.75<1.78") = [1 75 78]  -> ">=1.75<1.78" read as ">=1.75.78"
+//
+// So a recipe pinning `python.org: '>=3<3.12'` — because it does not work on
+// 3.12 and later — was refused 3.11.16, the version it wants, and offered
+// 3.14.7, the one it excludes. That is worse than a refusal: it selects a
+// version the recipe rules out, and says nothing.
+func TestSatisfiesCompoundConstraints(t *testing.T) {
+	for _, c := range []struct {
+		constraint, version string
+		want                bool
+	}{
+		// conjunction, written without a space, as the pantry writes it
+		{">=3<3.12", "3.11.16", true},
+		{">=3<3.12", "3.14.7", false}, // above the ceiling the recipe set
+		{">=3<3.12", "2.7.18", false}, // below the floor
+		{">=3<3.12", "3.12.0", false}, // the ceiling is exclusive
+		{">=1.75<1.78", "1.76.0", true},
+		{">=1.75<1.78", "1.99.0", false},
+		{">=1.75<1.78", "1.70.0", false},
+		// the spaced spelling means the same thing
+		{">=3 <3.12", "3.11.16", true},
+		{">=3 <3.12", "3.14.7", false},
+		// alternatives: any one is enough
+		{"^16 || ^18 || ^20", "20.11.0", true},
+		{"^16 || ^18 || ^20", "18.2.0", true},
+		{"^16 || ^18 || ^20", "16.0.0", true},
+		{"^16 || ^18 || ^20", "22.0.0", false},
+		{"^16 || ^18 || ^20", "14.0.0", false},
+		// a single comparator is unchanged
+		{">=3", "3.14.7", true},
+		{"<3.15", "3.14.7", true},
+		{"^3", "3.14.7", true},
+		{"~3.12", "3.12.14", true},
+		{"~3.12", "3.13.0", false},
+		{"*", "9.9.9", true},
+		{"", "9.9.9", true},
+	} {
+		if got := ParseVer(c.version).Satisfies(c.constraint); got != c.want {
+			t.Errorf("ParseVer(%q).Satisfies(%q) = %v, want %v", c.version, c.constraint, got, c.want)
+		}
+	}
+}
+
+// splitComparators must leave a single-comparator constraint whole, and must
+// not treat the "=" of ">=" as the start of a new part.
+func TestSplitComparators(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want []string
+	}{
+		{">=3<3.12", []string{">=3", "<3.12"}},
+		{">=3 <3.12", []string{">=3", "<3.12"}},
+		{">=1.75<1.78", []string{">=1.75", "<1.78"}},
+		{">=3", []string{">=3"}},
+		{"^3", []string{"^3"}},
+		{"3.12", []string{"3.12"}},
+		{">1<2<3", []string{">1", "<2", "<3"}},
+	} {
+		got := splitComparators(c.in)
+		if len(got) != len(c.want) {
+			t.Errorf("splitComparators(%q) = %v, want %v", c.in, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("splitComparators(%q) = %v, want %v", c.in, got, c.want)
+				break
+			}
+		}
+	}
+}
