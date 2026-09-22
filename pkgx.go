@@ -235,9 +235,45 @@ func cmpVer(a, b Ver) int {
 // and a bare "A.B.C" (treated as a caret-style lower bound so partial pins like
 // "1" or "1.1" match a whole line). The upper-bound operators "<"/"<=" are what
 // build-dep pins such as `llvm.org: <19` use.
+// satisfies reports whether v meets a pkgx constraint, including the compound
+// forms: alternatives separated by "||", and a conjunction of comparators
+// written with or without a space (">=3<3.12", ">=3 <3.12").
+//
+// Neither was handled, and the failure was not a refusal. ParseVer swallows the
+// second comparator and concatenates what follows, so the constraint became a
+// DIFFERENT one:
+//
+//	ParseVer("3<3.12")    = [3 12]     -> ">=3<3.12"    read as ">=3.12"
+//	ParseVer("1.75<1.78") = [1 75 78]  -> ">=1.75<1.78" read as ">=1.75.78"
+//
+// A recipe pinning `python.org: '>=3<3.12'` — because it does not work on 3.12
+// and later — was therefore refused 3.11.16, the version it wants, and offered
+// 3.14.7, the one it excludes. 106 recipes in the pantry write a constraint of
+// this shape; none of the ones checked has a bottle built by this factory.
+//
+// "||" was simply false for everything, so `^16 || ^18 || ^20` matched no
+// nodejs at all.
 func (v Ver) satisfies(c string) bool {
 	c = strings.TrimSpace(strings.Trim(c, "'\""))
 	if c == "" || c == "*" {
+		return true
+	}
+	// Alternatives: any one is enough.
+	if alts := strings.Split(c, "||"); len(alts) > 1 {
+		for _, a := range alts {
+			if v.satisfies(a) {
+				return true
+			}
+		}
+		return false
+	}
+	// A conjunction of comparators: every one must hold.
+	if parts := splitComparators(c); len(parts) > 1 {
+		for _, p := range parts {
+			if !v.satisfies(p) {
+				return false
+			}
+		}
 		return true
 	}
 	op := "^"
@@ -676,6 +712,28 @@ func tagSpellings(v Ver) []string {
 				out = append(out, cand)
 			}
 		}
+	}
+	return out
+}
+
+// splitComparators cuts a conjunction into its comparator-led parts. A new part
+// begins at any "<" or ">" that is not the first character; the "=" of ">=" and
+// "<=" is part of its operator and never starts one. A constraint with a single
+// comparator comes back whole.
+func splitComparators(c string) []string {
+	var out []string
+	start := 0
+	for i := 1; i < len(c); i++ {
+		if c[i] != '<' && c[i] != '>' {
+			continue
+		}
+		if p := strings.TrimSpace(c[start:i]); p != "" {
+			out = append(out, p)
+		}
+		start = i
+	}
+	if p := strings.TrimSpace(c[start:]); p != "" {
+		out = append(out, p)
 	}
 	return out
 }
