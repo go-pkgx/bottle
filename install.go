@@ -34,9 +34,35 @@ func ResolveBinPath(bin string) string {
 // BinNames returns the base names of the binaries a package provides, falling
 // back to the project's leaf name when it declares no `provides:`.
 func BinNames(project string, provides []string) []string {
+	return BinNamesFor(project, provides, "")
+}
+
+// BinNamesFor is BinNames with the package's version in hand, so a recipe that
+// names its binary AFTER that version is reachable.
+//
+// apache.org/apr-util provides exactly one program:
+//
+//	provides:
+//	  - bin/apu-{{ version.major }}-config
+//
+// and taken verbatim that is a file called `apu-{{ version.major }}-config`,
+// which exists nowhere. `pkgx apache.org/apr-util` answered
+//
+//	command not found in the requested packages: apu-{{ version.major }}-config
+//
+// Six pantry recipes put a moustache in a bin/ name; five of them also list a
+// plain one and were saved by it. This is the sixth.
+//
+// An empty version means "do not expand": the callers that have no version are
+// asking what the recipe SAYS, and a placeholder silently becoming empty there
+// would turn one unusable name into a different unusable name.
+func BinNamesFor(project string, provides []string, version string) []string {
 	var names []string
 	for _, prov := range provides {
 		if prov = strings.TrimSpace(prov); strings.HasPrefix(prov, "bin/") {
+			if version != "" {
+				prov = expandRecipeVars(prov, "", version)
+			}
 			names = append(names, filepath.Base(prov))
 		}
 	}
@@ -51,7 +77,12 @@ func BinNames(project string, provides []string) []string {
 // label (perl.org -> perl, not the first-listed corelist), else the first
 // provided binary.
 func PrimaryBin(project string, provides []string) string {
-	names := BinNames(project, provides)
+	return PrimaryBinFor(project, provides, "")
+}
+
+// PrimaryBinFor is PrimaryBin with the version in hand — see BinNamesFor.
+func PrimaryBinFor(project string, provides []string, version string) string {
+	names := BinNamesFor(project, provides, version)
 	cands := []string{filepath.Base(project)}
 	if !strings.Contains(project, "/") {
 		if i := strings.Index(project, "."); i > 0 {
@@ -154,7 +185,7 @@ func StubBinsStaged(closure []Resolved, s Stage) (int, error) {
 		if err != nil {
 			continue
 		}
-		for _, name := range BinNames(r.Project, provides) {
+		for _, name := range BinNamesFor(r.Project, provides, r.Version.Raw) {
 			real := filepath.Join(pkgPrefix, "bin", name)
 			if _, err := os.Stat(real); err != nil {
 				continue

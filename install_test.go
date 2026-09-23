@@ -199,3 +199,41 @@ func TestSetupScratchRootfsAtReadOnlyDir(t *testing.T) {
 		t.Error("expected the shell symlink to fail in a read-only dir")
 	}
 }
+
+// A recipe may name its binary after its own version. apache.org/apr-util
+// provides exactly one program, `bin/apu-{{ version.major }}-config`, and taken
+// verbatim that is a file that exists nowhere:
+//
+//	pkgx: command not found in the requested packages: apu-{{ version.major }}-config
+//
+// Six pantry recipes put a moustache in a bin/ name; five also list a plain one
+// and were saved by it. This is the sixth, and it is published for darwin.
+func TestBinNamesForExpandsTheVersion(t *testing.T) {
+	provides := []string{"bin/apu-{{ version.major }}-config"}
+	if got := BinNamesFor("apache.org/apr-util", provides, "1.6.3"); len(got) != 1 || got[0] != "apu-1-config" {
+		t.Errorf("BinNamesFor = %v, want [apu-1-config]", got)
+	}
+	if got := PrimaryBinFor("apache.org/apr-util", provides, "1.6.3"); got != "apu-1-config" {
+		t.Errorf("PrimaryBinFor = %q, want apu-1-config", got)
+	}
+	// marketing and raw spellings, and a name with no moustache at all
+	for _, c := range []struct{ prov, ver, want string }{
+		{"bin/python{{ version.marketing }}", "3.11.16", "python3.11"},
+		{"bin/foo-{{version.raw}}", "2.0.1", "foo-2.0.1"},
+		{"bin/plain", "1.0.0", "plain"},
+	} {
+		if got := BinNamesFor("p", []string{c.prov}, c.ver); len(got) != 1 || got[0] != c.want {
+			t.Errorf("%q at %s -> %v, want [%s]", c.prov, c.ver, got, c.want)
+		}
+	}
+}
+
+// With no version the caller is asking what the recipe SAYS. Expanding there
+// would turn a placeholder into an empty string — one unusable name traded for
+// a different unusable name — so the text is returned untouched.
+func TestBinNamesWithoutAVersionIsVerbatim(t *testing.T) {
+	got := BinNames("apache.org/apr-util", []string{"bin/apu-{{ version.major }}-config"})
+	if len(got) != 1 || got[0] != "apu-{{ version.major }}-config" {
+		t.Errorf("BinNames = %v, want the name verbatim", got)
+	}
+}
