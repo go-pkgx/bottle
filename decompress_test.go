@@ -54,7 +54,7 @@ func TestDecompressorRoundTripsEveryPublishedCodec(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		dec, closeDec, err := decompressor(tc.ext, bytes.NewReader(packed.Bytes()))
+		dec, closeDec, err := Decompressor(tc.ext, bytes.NewReader(packed.Bytes()))
 		if err != nil {
 			t.Fatalf("%s: %v", tc.ext, err)
 		}
@@ -77,7 +77,7 @@ func TestDecompressorEmptyExtIsGzip(t *testing.T) {
 	w.Write([]byte("x"))
 	w.Close()
 
-	dec, closeDec, err := decompressor("", bytes.NewReader(packed.Bytes()))
+	dec, closeDec, err := Decompressor("", bytes.NewReader(packed.Bytes()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestDecompressorEmptyExtIsGzip(t *testing.T) {
 // TestDecompressorRejectsUnknown: an unknown codec must say so by name rather
 // than fail as a corrupt stream three layers down.
 func TestDecompressorRejectsUnknown(t *testing.T) {
-	if _, _, err := decompressor(".tar.br", bytes.NewReader(nil)); err == nil ||
+	if _, _, err := Decompressor(".tar.br", bytes.NewReader(nil)); err == nil ||
 		!strings.Contains(err.Error(), ".tar.br") {
 		t.Fatalf("err = %v", err)
 	}
@@ -103,7 +103,7 @@ func TestDecompressorRejectsUnknown(t *testing.T) {
 // the question the installer does: does anything come out?
 func TestDecompressorReportsBadStreams(t *testing.T) {
 	for _, ext := range []string{ExtTarGz, ExtTarXz, ExtTarZst} {
-		dec, closeDec, err := decompressor(ext, bytes.NewReader([]byte("not compressed at all")))
+		dec, closeDec, err := Decompressor(ext, bytes.NewReader([]byte("not compressed at all")))
 		if err != nil {
 			continue // rejected at construction
 		}
@@ -181,7 +181,7 @@ func TestZstdBottleRoundTripsThroughTheRegistry(t *testing.T) {
 	}
 
 	// And the installer's own path: decompress what came back.
-	dec, closeDec, err := decompressor(ext, bytes.NewReader(got))
+	dec, closeDec, err := Decompressor(ext, bytes.NewReader(got))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestDecompressorReportsConstructorFailure(t *testing.T) {
 	zstdNewReader = func(io.Reader) (*zstd.Decoder, error) { return nil, io.ErrUnexpectedEOF }
 	defer func() { zstdNewReader = orig }()
 
-	if _, _, err := decompressor(ExtTarZst, bytes.NewReader(nil)); err == nil {
+	if _, _, err := Decompressor(ExtTarZst, bytes.NewReader(nil)); err == nil {
 		t.Fatal("want the constructor error")
 	}
 }

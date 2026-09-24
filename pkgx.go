@@ -1177,7 +1177,7 @@ func InstallFor(r Resolved, pkgxDir, osn, arch string) (bool, error) {
 		return false, err
 	}
 	defer body.Close()
-	dec, closeDec, err := decompressor(ext, body)
+	dec, closeDec, err := Decompressor(ext, body)
 	if err != nil {
 		return false, err
 	}
