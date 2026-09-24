@@ -9,7 +9,7 @@ import (
 	"github.com/ulikunitz/xz"
 )
 
-// decompressor wraps a bottle body in the decoder its extension names, and
+// Decompressor wraps a bottle body in the decoder its extension names, and
 // returns a close function for the decoders that hold resources.
 //
 // A bottle's compression is not a detail the installer may guess: a reader that
@@ -19,7 +19,7 @@ import (
 //
 // All three decoders stream, which matters now that the pull stages the tarball
 // on disk: nothing here holds a bottle in memory.
-func decompressor(ext string, body io.Reader) (io.Reader, func(), error) {
+func Decompressor(ext string, body io.Reader) (io.Reader, func(), error) {
 	switch ext {
 	case ExtTarZst:
 		z, err := zstdNewReader(body)
