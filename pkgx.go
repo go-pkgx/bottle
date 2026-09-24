@@ -643,6 +643,22 @@ func PickVersion(project, constraint string) (Ver, error) {
 // where the darwin one does not — so a host that stages a rootfs for another
 // platform must resolve against that platform's catalogue, not its own.
 func PickVersionFor(project, constraint, osn, arch string) (Ver, error) {
+	return PickVersionForAll(project, []string{constraint}, osn, arch)
+}
+
+// PickVersionForAll is PickVersionFor for SEVERAL constraints that must all
+// hold — the case a dependency closure creates when two packages ask for the
+// same project.
+//
+// Taking one constraint was not a simplification, it was a silent choice. The
+// closure walk kept the FIRST constraint it reached and discarded every later
+// one, so `gnome.org/glib` asking for `gnu.org/gettext: ^0.21` and
+// `freedesktop.org/fontconfig` asking for `^1` never met: whichever was
+// dequeued first won, and the other package could not load. Worse, the queue
+// was seeded from a Go map, so the winner changed between runs — the same
+// closure resolved gettext to 0.26 eight times and 1.0.0 four times out of
+// twelve.
+func PickVersionForAll(project string, constraints []string, osn, arch string) (Ver, error) {
 	vs, fromRegistry, err := versionsForSourced(project, osn, arch)
 	if err != nil {
 		return Ver{}, err
@@ -658,7 +674,7 @@ func PickVersionFor(project, constraint, osn, arch string) (Ver, error) {
 	// index fetch and a half-published version is stepped over instead.
 	var absent []string
 	for i := len(vs) - 1; i >= 0; i-- {
-		if !vs[i].satisfies(constraint) {
+		if !satisfiesAll(vs[i], constraints) {
 			continue
 		}
 		if fromRegistry {
@@ -677,10 +693,37 @@ func PickVersionFor(project, constraint, osn, arch string) (Ver, error) {
 		return vs[i], nil
 	}
 	if len(absent) > 0 {
-		return Ver{}, fmt.Errorf("no version of %s satisfies %q AND is published for %s/%s (available: %d; satisfy but not published here: %s)",
-			project, constraint, osn, arch, len(vs), strings.Join(absent, " "))
+		return Ver{}, fmt.Errorf("no version of %s satisfies %s AND is published for %s/%s (available: %d; satisfy but not published here: %s)",
+			project, quoteAll(constraints), osn, arch, len(vs), strings.Join(absent, " "))
 	}
-	return Ver{}, fmt.Errorf("no version of %s satisfies %q (available: %d)", project, constraint, len(vs))
+	return Ver{}, fmt.Errorf("no version of %s satisfies %s (available: %d)", project, quoteAll(constraints), len(vs))
+}
+
+// satisfiesAll reports whether v meets EVERY constraint. An empty set is met by
+// anything: a project reached only as a dependency of something that named no
+// version still has to resolve.
+func satisfiesAll(v Ver, constraints []string) bool {
+	for _, c := range constraints {
+		if !v.satisfies(c) {
+			return false
+		}
+	}
+	return true
+}
+
+// quoteAll renders a constraint set for an error an operator has to act on.
+// One constraint reads as before; several are listed with " AND " between them,
+// because the failure is that they cannot hold TOGETHER and naming only one of
+// them sends the reader to the wrong recipe.
+func quoteAll(constraints []string) string {
+	if len(constraints) == 1 {
+		return strconv.Quote(constraints[0])
+	}
+	q := make([]string, len(constraints))
+	for i, c := range constraints {
+		q[i] = strconv.Quote(c)
+	}
+	return strings.Join(q, " AND ")
 }
 
 // publishedTagFor finds which registry TAG carries this version for os/arch,
@@ -947,39 +990,101 @@ func ResolveClosure(roots map[string]string) ([]Resolved, error) {
 // platform's terms. This is what lets a darwin machine stage a complete
 // linux/aarch64 userland, which is how the sovereign builder image is built.
 func ResolveClosureFor(roots map[string]string, osn, arch string) ([]Resolved, error) {
-	seen := map[string]Ver{}
-	queue := []struct{ p, c string }{}
-	for p, c := range roots {
-		queue = append(queue, struct{ p, c string }{p, c})
-	}
-	var order []string
-	for len(queue) > 0 {
-		item := queue[0]
-		queue = queue[1:]
-		if _, ok := seen[item.p]; ok {
-			continue
-		}
-		v, err := PickVersionFor(item.p, item.c, osn, arch)
-		if err != nil {
-			return nil, err
-		}
-		seen[item.p] = v
-		order = append(order, item.p)
-		deps, _, err := FetchMetaFor(item.p, osn, arch)
-		if err != nil {
-			return nil, err
-		}
-		for dp, dc := range deps {
-			if _, ok := seen[dp]; !ok {
-				queue = append(queue, struct{ p, c string }{dp, dc})
-			}
-		}
+	constraints, askedBy, order, err := collectConstraints(roots, osn, arch)
+	if err != nil {
+		return nil, err
 	}
 	out := make([]Resolved, 0, len(order))
 	for _, p := range order {
-		out = append(out, Resolved{p, seen[p]})
+		v, err := PickVersionForAll(p, constraints[p], osn, arch)
+		if err != nil {
+			return nil, closureErr(p, constraints[p], askedBy[p], err)
+		}
+		out = append(out, Resolved{p, v})
 	}
 	return out, nil
+}
+
+// collectConstraints walks the graph and gathers EVERY constraint on each
+// project, with who asked for it, before any version is chosen.
+//
+// Two passes are exact here because FetchMetaFor does not take a version: the
+// dependency graph does not depend on what gets picked, so nothing can change
+// once the walk is done. Resolving as it walked is what made the old version
+// keep the first constraint and drop the rest.
+//
+// The walk is DETERMINISTIC: roots and each project's dependencies are visited
+// in sorted order. Seeding the queue from a Go map meant the same closure
+// resolved differently between runs — measured at gettext 0.26 eight times and
+// 1.0.0 four times out of twelve — and the losing package could not load.
+func collectConstraints(roots map[string]string, osn, arch string) (constraints map[string][]string, askedBy map[string][]string, order []string, err error) {
+	constraints, askedBy = map[string][]string{}, map[string][]string{}
+	add := func(project, constraint, who string) {
+		if constraint == "" || constraint == "*" {
+			return // nothing to intersect, and nothing an operator needs told
+		}
+		for _, have := range constraints[project] {
+			if have == constraint {
+				return // the same demand twice is one demand
+			}
+		}
+		constraints[project] = append(constraints[project], constraint)
+		askedBy[project] = append(askedBy[project], who)
+	}
+	seen := map[string]bool{}
+	queue := sortedKeys(roots)
+	for _, p := range queue {
+		add(p, roots[p], "requested")
+	}
+	for len(queue) > 0 {
+		project := queue[0]
+		queue = queue[1:]
+		if seen[project] {
+			continue
+		}
+		seen[project] = true
+		order = append(order, project)
+		deps, _, err := FetchMetaFor(project, osn, arch)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		for _, dp := range sortedKeys(deps) {
+			add(dp, deps[dp], project)
+			if !seen[dp] {
+				queue = append(queue, dp)
+			}
+		}
+	}
+	return constraints, askedBy, order, nil
+}
+
+// closureErr names WHO asked for each constraint when a project cannot satisfy
+// them together.
+//
+// "no version of gnu.org/gettext satisfies \"^0.21\" AND \"^1\"" states the
+// conflict and leaves the reader to grep the pantry for both. The packages that
+// disagree are what has to change, so the error names them.
+func closureErr(project string, constraints, askedBy []string, err error) error {
+	if len(constraints) < 2 {
+		return err
+	}
+	parts := make([]string, len(constraints))
+	for i := range constraints {
+		parts[i] = fmt.Sprintf("%s (%s)", constraints[i], askedBy[i])
+	}
+	return fmt.Errorf("%w; asked for by %s", err, strings.Join(parts, ", "))
+}
+
+// sortedKeys is map iteration made reproducible. Go randomises it, and a
+// resolution order that changes between runs is a closure that changes between
+// runs.
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // --- download + extract -----------------------------------------------------
