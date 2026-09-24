@@ -1018,6 +1018,18 @@ func ResolveClosureFor(roots map[string]string, osn, arch string) ([]Resolved, e
 // resolved differently between runs — measured at gettext 0.26 eight times and
 // 1.0.0 four times out of twelve — and the losing package could not load.
 func collectConstraints(roots map[string]string, osn, arch string) (constraints map[string][]string, askedBy map[string][]string, order []string, err error) {
+	constraints, askedBy, _, order, err = collectGraph(roots, osn, arch)
+	return
+}
+
+// collectGraph is collectConstraints keeping the EDGES as well: who depends on
+// whom, under which constraint.
+//
+// The resolver has always known this — it is what lets a refusal say "asked for
+// by ^1 (x.org/exts), =1.8.11 (tcl-lang.org)" — and nothing could ask it. An
+// operator composing an environment needs the same answer BEFORE it fails:
+// which version was chosen, and which demand chose it.
+func collectGraph(roots map[string]string, osn, arch string) (constraints map[string][]string, askedBy map[string][]string, edges []Edge, order []string, err error) {
 	constraints, askedBy = map[string][]string{}, map[string][]string{}
 	add := func(project, constraint, who string) {
 		if constraint == "" || constraint == "*" {
@@ -1035,6 +1047,7 @@ func collectConstraints(roots map[string]string, osn, arch string) (constraints 
 	queue := sortedKeys(roots)
 	for _, p := range queue {
 		add(p, roots[p], "requested")
+		edges = append(edges, Edge{Of: "", On: p, Constraint: roots[p]})
 	}
 	for len(queue) > 0 {
 		project := queue[0]
@@ -1044,18 +1057,68 @@ func collectConstraints(roots map[string]string, osn, arch string) (constraints 
 		}
 		seen[project] = true
 		order = append(order, project)
-		deps, _, err := FetchMetaFor(project, osn, arch)
-		if err != nil {
-			return nil, nil, nil, err
+		deps, _, ferr := FetchMetaFor(project, osn, arch)
+		if ferr != nil {
+			return nil, nil, nil, nil, ferr
 		}
 		for _, dp := range sortedKeys(deps) {
 			add(dp, deps[dp], project)
+			edges = append(edges, Edge{Of: project, On: dp, Constraint: deps[dp]})
 			if !seen[dp] {
 				queue = append(queue, dp)
 			}
 		}
 	}
-	return constraints, askedBy, order, nil
+	return constraints, askedBy, edges, order, nil
+}
+
+// Edge is one dependency: Of depends On, under Constraint. An Of of "" is a
+// project the operator asked for directly.
+type Edge struct {
+	Of         string
+	On         string
+	Constraint string
+}
+
+// Graph is a resolved closure with its edges kept, so a caller can show WHY a
+// version was chosen and not only WHICH.
+type Graph struct {
+	Roots    []string          // what was asked for, sorted
+	Versions map[string]Ver    // project -> the version the unifier picked
+	Deps     map[string][]Edge // project -> the edges leaving it, sorted by On
+	Asks     map[string][]Edge // project -> the edges pointing AT it
+}
+
+// GraphFor resolves a closure and returns it with its structure intact.
+//
+// Same walk, same unifier and same determinism as ResolveClosureFor: this is a
+// view of the resolution, not a second implementation of it, so what it shows
+// is what a build or an environment will get.
+func GraphFor(roots map[string]string, osn, arch string) (*Graph, error) {
+	constraints, askedBy, edges, order, err := collectGraph(roots, osn, arch)
+	if err != nil {
+		return nil, err
+	}
+	g := &Graph{
+		Roots:    sortedKeys(roots),
+		Versions: map[string]Ver{},
+		Deps:     map[string][]Edge{},
+		Asks:     map[string][]Edge{},
+	}
+	for _, p := range order {
+		v, err := PickVersionForAll(p, constraints[p], osn, arch)
+		if err != nil {
+			return nil, closureErr(p, constraints[p], askedBy[p], err)
+		}
+		g.Versions[p] = v
+	}
+	for _, e := range edges {
+		if e.Of != "" {
+			g.Deps[e.Of] = append(g.Deps[e.Of], e)
+		}
+		g.Asks[e.On] = append(g.Asks[e.On], e)
+	}
+	return g, nil
 }
 
 // closureErr names WHO asked for each constraint when a project cannot satisfy
