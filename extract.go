@@ -95,7 +95,7 @@ func Extract(tr *tar.Reader, dest string, strip int) error {
 			if err := extMkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
-			source, err := extLinkSource(dest, hdr.Linkname)
+			source, err := extLinkSource(dest, hdr.Linkname, strip)
 			if err != nil {
 				return err
 			}
@@ -142,13 +142,32 @@ func extSafeTarget(dest, name string, strip int) (target string, ok bool, err er
 }
 
 // extLinkSource resolves a hard-link source name to a path under dest, applying
-// the same safety vetting as extSafeTarget (a hard link may not point outside
-// the extraction root).
-func extLinkSource(dest, linkname string) (string, error) {
+// the same component STRIPPING and the same safety vetting as extSafeTarget.
+//
+// It used to apply only the vetting, and the comment saying "the same safety
+// vetting" is what made that look complete. A tar entry's link target names the
+// file as the ARCHIVE spells it, so with --strip-components it has to be
+// stripped exactly like the entry's own name — otherwise the link points at a
+// path that was never created:
+//
+//	fetch: link .../build/graphviz-16.0.0/redhat/graphviz.spec.fedora.in   <- source, unstripped
+//	            .../build/redhat/graphviz.spec.fedora.in                   <- target, stripped
+//
+// graphviz.org 16.0.0 failed its whole rebuild on that, before compiling a
+// line. Every archive that carries a hard link and needs stripping hits it; the
+// reason it is not more visible is that hard links in source tarballs are rare.
+func extLinkSource(dest, linkname string, strip int) (string, error) {
 	if path.IsAbs(linkname) || filepath.IsAbs(filepath.FromSlash(linkname)) {
 		return "", fmt.Errorf("%w: link %q", ErrInsecurePath, linkname)
 	}
-	source := filepath.Join(dest, filepath.FromSlash(path.Clean(linkname)))
+	parts := stripComponents(linkname)
+	if len(parts) <= strip {
+		// The target is above the stripped root, so the file it names is not in
+		// the extracted tree at all. Refusing names it; os.Link would fail with
+		// a path nobody asked for.
+		return "", fmt.Errorf("link target %q is above the %d stripped component(s)", linkname, strip)
+	}
+	source := filepath.Join(dest, filepath.FromSlash(path.Join(parts[strip:]...)))
 	prefix := filepath.Clean(dest) + string(filepath.Separator)
 	if !strings.HasPrefix(source+string(filepath.Separator), prefix) {
 		return "", fmt.Errorf("%w: link %q", ErrInsecurePath, linkname)
