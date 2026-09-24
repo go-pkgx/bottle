@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -295,5 +296,66 @@ func TestExtractHelpers(t *testing.T) {
 	// extSafeTarget: a name cleaning to "." is skipped (ok == false, no error).
 	if _, ok, err := extSafeTarget(t.TempDir(), "./", 0); ok || err != nil {
 		t.Errorf(`extSafeTarget("./") = ok=%v err=%v; want ok=false err=nil`, ok, err)
+	}
+}
+
+// TestExtractStripsTheHardLinkTargetToo is graphviz.org 16.0.0's shape: a
+// release tarball whose entries all sit under one top directory, carrying a
+// hard link whose target is spelled the same way.
+//
+// The entry's own name was stripped and the link target was not, so the link
+// pointed at a path that was never created and the whole fetch failed before a
+// line was compiled:
+//
+//	fetch: link .../build/graphviz-16.0.0/redhat/graphviz.spec.fedora.in
+//	            .../build/redhat/graphviz.spec.fedora.in
+func TestExtractStripsTheHardLinkTargetToo(t *testing.T) {
+	skipOnWASI(t, wasiNoChmod)
+	dest := t.TempDir()
+	data := buildExtractTar(t, []tarEntry{
+		{name: "graphviz-16.0.0", typ: tar.TypeDir, mode: 0o755},
+		{name: "graphviz-16.0.0/redhat", typ: tar.TypeDir, mode: 0o755},
+		{name: "graphviz-16.0.0/redhat/spec.in", typ: tar.TypeReg, mode: 0o644, body: "spec"},
+		{name: "graphviz-16.0.0/redhat/spec.fedora.in", typ: tar.TypeLink, link: "graphviz-16.0.0/redhat/spec.in"},
+	})
+	if err := extract(data, dest, 1); err != nil {
+		t.Fatalf("extract with strip=1: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dest, "redhat/spec.fedora.in"))
+	if err != nil {
+		t.Fatalf("hard link not created: %v", err)
+	}
+	if string(got) != "spec" {
+		t.Errorf("link content = %q, want %q", got, "spec")
+	}
+	// It is a LINK, not a copy: same inode as its source.
+	a, err := os.Stat(filepath.Join(dest, "redhat/spec.in"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.Stat(filepath.Join(dest, "redhat/spec.fedora.in"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(a, b) {
+		t.Error("extracted a copy rather than a hard link")
+	}
+}
+
+// TestExtractRefusesALinkAboveTheStrippedRoot: a target that strips away
+// entirely names a file outside the extracted tree. Refusing says so; os.Link
+// would fail on a path nobody wrote.
+func TestExtractRefusesALinkAboveTheStrippedRoot(t *testing.T) {
+	dest := t.TempDir()
+	data := buildExtractTar(t, []tarEntry{
+		{name: "top/d", typ: tar.TypeDir, mode: 0o755},
+		{name: "top/d/h", typ: tar.TypeLink, link: "top"},
+	})
+	err := extract(data, dest, 1)
+	if err == nil {
+		t.Fatal("want a refusal for a link target above the stripped root")
+	}
+	if !strings.Contains(err.Error(), "stripped component") {
+		t.Errorf("error does not explain itself: %v", err)
 	}
 }
