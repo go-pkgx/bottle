@@ -71,3 +71,34 @@ func TestASingleDemandIsNotAConflict(t *testing.T) {
 		t.Errorf("a single demand was reported as a conflict: %+v", ce)
 	}
 }
+
+// One demand is not a conflict — callers classify on the type, and pkgx's
+// `compat` counts conflicts apart from everything else — but it still has an
+// author. Losing it is expensive in exactly the case where it matters most:
+// a single unsatisfiable demand is somebody's mistake.
+func TestClosureErrNamesTheAuthorOfASingleDemand(t *testing.T) {
+	base := errors.New(`no version of ijg.org satisfies "9.6" (available: 2)`)
+	err := closureErr("ijg.org", []string{"9.6"}, []string{"libvips.org"}, base)
+
+	var ce *ConflictError
+	if errors.As(err, &ce) {
+		t.Fatal("a single demand was reported as a conflict")
+	}
+	if !errors.Is(err, base) {
+		t.Error("the original error was not wrapped")
+	}
+	if !strings.Contains(err.Error(), "asked for by 9.6 (libvips.org)") {
+		t.Errorf("err = %v, want the author named", err)
+	}
+}
+
+// Nothing to attribute: no suffix, and the error is returned untouched.
+func TestClosureErrWithNoAuthor(t *testing.T) {
+	base := errors.New("boom")
+	if got := closureErr("a.org", []string{"1"}, nil, base); got != base {
+		t.Errorf("err = %v, want the original", got)
+	}
+	if got := closureErr("a.org", nil, nil, base); got != base {
+		t.Errorf("err = %v, want the original", got)
+	}
+}

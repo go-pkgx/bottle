@@ -1156,6 +1156,21 @@ func GraphFor(roots map[string]string, osn, arch string) (*Graph, error) {
 // disagree are what has to change, so the error names them.
 func closureErr(project string, constraints, askedBy []string, err error) error {
 	if len(constraints) < 2 {
+		// NOT a ConflictError: one demand is not a conflict, and callers
+		// classify on that type — pkgx's `compat` counts conflicts apart from
+		// everything else, and calling this one would corrupt that count.
+		//
+		// But it still has an AUTHOR, and losing it is expensive in exactly
+		// the case where it matters most. Measured on libvips.org:
+		//
+		//   no version of ijg.org satisfies "9.6" (available: 2)
+		//
+		// which says a demand is wrong and not whose. A single unsatisfiable
+		// demand is somebody's mistake, and naming them is the difference
+		// between a report and a search.
+		if len(constraints) == 1 && len(askedBy) == 1 && askedBy[0] != "" {
+			return fmt.Errorf("%w; asked for by %s (%s)", err, constraints[0], askedBy[0])
+		}
 		return err
 	}
 	return &ConflictError{Project: project, Constraints: constraints, AskedBy: askedBy, Err: err}
