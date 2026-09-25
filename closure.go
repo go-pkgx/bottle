@@ -234,9 +234,24 @@ func CompleteClosure(roots map[string]string, dir string) ([]Resolved, error) {
 			return nil, err
 		}
 	}
-	if goos() != "linux" {
-		return closure, nil
+	switch goos() {
+	case "linux":
+		return completeELF(closure, dir)
+	case "darwin":
+		return completeMachO(closure, dir)
 	}
+	return closure, nil
+}
+
+// completeELF is the repair for a format that binds by SONAME: read every
+// DT_NEEDED, and pull whatever bottle provides a soname nothing in the closure
+// offers. Two versions of one project may both be installed — the dedup below
+// is on project@version, not project — because each ships a different soname
+// and both lib directories sit on LD_LIBRARY_PATH.
+//
+// Mach-O cannot work this way: a reference is a PATH, not a name to search
+// for, so the darwin half is completeMachO and the two share only the shape.
+func completeELF(closure []Resolved, dir string) ([]Resolved, error) {
 	have := map[string]bool{}
 	installedVer := map[string]bool{} // "project@version" already in the closure
 	for _, r := range closure {
