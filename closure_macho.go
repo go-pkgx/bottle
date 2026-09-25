@@ -1,0 +1,223 @@
+package bottle
+
+import (
+	"debug/macho"
+	"io/fs"
+	"os"
+	"path"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+)
+
+// The three load commands that make a file DEPEND on another. Not LC_ID_DYLIB
+// (0x0d), which says where this file expects to live: counting it makes every
+// library look like it depends on its own home.
+const (
+	lcLoadDylib     = 0x0c
+	lcLoadWeakDylib = 0x18 | 0x80000000
+	lcReexportDylib = 0x1f | 0x80000000
+)
+
+// MachoNeeded is what a Mach-O file loads. It is the darwin counterpart of
+// ELF's DT_NEEDED, and it lives here rather than in a build tool because the
+// closure needs it too: bk reads it to rewrite a reference, bottle reads it to
+// find out whether that reference resolves.
+//
+// A file that is not a Mach-O is not an error worth propagating — a store is
+// mostly text — so the caller gets an empty list and the walk continues.
+func MachoNeeded(p string) ([]string, error) {
+	f, err := macho.Open(p)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var out []string
+	for _, l := range f.Loads {
+		b := l.Raw()
+		if len(b) < 12 {
+			continue
+		}
+		switch f.ByteOrder.Uint32(b[0:4]) {
+		case lcLoadDylib, lcLoadWeakDylib, lcReexportDylib:
+		default:
+			continue
+		}
+		off := f.ByteOrder.Uint32(b[8:12])
+		if int(off) >= len(b) {
+			continue
+		}
+		s := b[off:]
+		if i := indexZero(s); i >= 0 {
+			s = s[:i]
+		}
+		out = append(out, string(s))
+	}
+	return out, nil
+}
+
+func indexZero(b []byte) int {
+	for i, c := range b {
+		if c == 0 {
+			return i
+		}
+	}
+	return -1
+}
+
+// storeRefRE splits an @rpath reference into the project and the directory it
+// binds through: either an ABI line (abi-libxml2.16.dylib) or a version
+// directory (v2). The project name has slashes in it — gnupg.org/gpgme — so
+// that second segment is the only reliable terminator.
+var storeRefRE = regexp.MustCompile(`^@rpath/(.+?)/(abi-([^/]+)|v[0-9][^/]*)/(.+)$`)
+
+// Seams: the three things below that need a network, so the repair loop is
+// testable without one.
+var (
+	machoProvider = provideMachoSoname
+	machoVersions = FetchVersions
+	machoInstall  = Install
+)
+
+// want is one reference that does not resolve, reduced to what would fix it.
+type want struct {
+	project string
+	soname  string
+	ref     string // the reference as the binary records it
+	abiLine bool   // it binds through abi-<soname>, not through v<major>
+}
+
+func (w want) key() string { return w.project + "\x00" + w.soname }
+
+// unresolvedRefs is every @rpath reference in the store that names a file the
+// store does not have.
+//
+// This is the whole darwin question, and it is simpler than the ELF one: a
+// Mach-O reference is a path, so "is it satisfied" is a stat, not a search
+// through a library path. It is also stricter — ELF would find a compatible
+// soname anywhere on LD_LIBRARY_PATH; here the one named path either exists or
+// the program does not start.
+func unresolvedRefs(prefixes []string, dir string) []want {
+	seen := map[string]bool{}
+	var out []want
+	for _, prefix := range prefixes {
+		_ = filepath.WalkDir(prefix, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || !d.Type().IsRegular() {
+				return nil
+			}
+			refs, rerr := MachoNeeded(p)
+			if rerr != nil {
+				return nil
+			}
+			for _, ref := range refs {
+				if !strings.HasPrefix(ref, "@rpath/") {
+					continue // /usr/lib and the system frameworks are the host's
+				}
+				if _, serr := os.Stat(filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(ref, "@rpath/")))); serr == nil {
+					continue
+				}
+				m := storeRefRE.FindStringSubmatch(ref)
+				if m == nil {
+					continue
+				}
+				w := want{project: m[1], soname: m[3], ref: ref, abiLine: m[3] != ""}
+				if w.soname == "" {
+					w.soname = path.Base(m[4])
+				}
+				if seen[w.key()] {
+					continue
+				}
+				seen[w.key()] = true
+				out = append(out, w)
+			}
+			return nil
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].key() < out[j].key() })
+	return out
+}
+
+// completeMachO pulls the bottle that provides each soname the store is asked
+// for and does not have, so a closure runs on a FROM-scratch image.
+//
+// Two versions of one project can be installed at once, which is the point: a
+// reference through abi-<soname> names an ABI LINE rather than a major, and
+// two lines coexist as two symlinks beside the version directories. hwloc
+// needs libxml2.16.dylib in the same closure where gettext holds libxml2 at
+// the 2.13 line, and on darwin that is safe — the two-level namespace binds
+// each symbol to the library that defined it, so nothing is interposed.
+//
+// A reference through v<major> cannot be repaired that way: v2 is one symlink
+// and one version owns it. That case is reported rather than papered over,
+// because the fix is to rebuild the consumer against the ABI line, and a
+// warning at install time is a diagnosis where dyld's is a crash.
+func completeMachO(closure []Resolved, dir string) ([]Resolved, error) {
+	installedVer := map[string]bool{}
+	for _, r := range closure {
+		installedVer[r.Project+"@"+r.Version.Raw] = true
+	}
+	tried := map[string]bool{}
+	for round := 0; round < 8; round++ {
+		changed := false
+		for _, w := range unresolvedRefs(prefixesOf(closure, dir), dir) {
+			if tried[w.key()] {
+				continue
+			}
+			tried[w.key()] = true
+			if !w.abiLine {
+				warn("%s names %s through a major directory, which one version owns; "+
+					"rebuild it against the ABI line to hold both", w.project, w.soname)
+				continue
+			}
+			r, ok := machoProvider(w, dir)
+			if !ok {
+				continue
+			}
+			if installedVer[r.Project+"@"+r.Version.Raw] {
+				continue
+			}
+			installedVer[r.Project+"@"+r.Version.Raw] = true
+			closure = append(closure, r)
+			changed = true
+		}
+		if !changed {
+			break
+		}
+	}
+	return closure, nil
+}
+
+// provideMachoSoname installs the newest published version of w.project whose
+// bottle declares w.soname, or says why it could not.
+//
+// It asks the MANIFEST, not the bottle: publish records the sonames a bottle
+// ships as an annotation, so choosing between forty versions costs forty small
+// reads instead of forty downloads. A bottle published before that annotation
+// existed answers nothing, and is skipped rather than downloaded on the chance
+// — an old bottle is also one that predates the ABI links this depends on.
+func provideMachoSoname(w want, dir string) (Resolved, bool) {
+	vs, err := machoVersions(w.project)
+	if err != nil {
+		warn("cannot provide %s from %s: %v", w.soname, w.project, err)
+		return Resolved{}, false
+	}
+	osn, arch := HostSlug()
+	// FetchVersions answers ascending; the newest bottle that declares the
+	// soname is the one to hold the line.
+	const maxTry = 40
+	for i, n := len(vs)-1, 0; i >= 0 && n < maxTry; i, n = i-1, n+1 {
+		v := vs[i]
+		r := Resolved{w.project, v}
+		if !strings.Contains(","+abiAnnotations(w.project, v.tag(), osn, arch)[ABIProvidesAnnotation]+",", ","+w.soname+",") {
+			continue
+		}
+		if _, err := machoInstall(r, dir); err != nil {
+			warn("cannot install %s %s for %s: %v", w.project, v.Raw, w.soname, err)
+			continue
+		}
+		return r, true
+	}
+	warn("no published %s declares %s, so %s will not resolve", w.project, w.soname, w.ref)
+	return Resolved{}, false
+}
