@@ -315,6 +315,25 @@ func (c *OCIClient) PullFile(project, ver, osn, arch string) (*BlobFile, string,
 	return nil, "", fmt.Errorf("no bottle layer for %s v%s (%s/%s)", project, ver, osn, arch)
 }
 
+// PlatformAnnotations returns the annotations on the per-platform image
+// manifest — the map a publish attaches, e.g. org.go-pkgx.abi.provides.
+//
+// Separate from PullFile on purpose: the cache may serve the bottle, and a
+// mirror's manifest is not the authority on what the bottle DECLARES. This
+// always asks the dist the caller named.
+func (c *OCIClient) PlatformAnnotations(project, ver, osn, arch string) (map[string]string, error) {
+	ctx := context.Background()
+	repo, err := c.repository(project)
+	if err != nil {
+		return nil, err
+	}
+	_, man, err := c.resolvePlatform(ctx, repo, project, ver, osn, arch)
+	if err != nil {
+		return nil, err
+	}
+	return man.Annotations, nil
+}
+
 // resolvePlatform resolves a version tag to the per-platform image manifest for
 // os/arch: the tag is either a multi-platform index (pick the matching entry) or
 // a single image manifest. It returns that manifest's descriptor (for referrer
