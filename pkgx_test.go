@@ -96,13 +96,18 @@ func TestSatisfiesSpacedGE(t *testing.T) {
 
 func TestHostSlug(t *testing.T) {
 	osn, arch := HostSlug()
-	// Every slug osSlug can produce, not just the two this suite used to run
-	// on: the package builds and passes for js/wasm and wasip1/wasm too, and a
-	// test that hardcodes the platforms it expects to run on fails the day it
-	// runs somewhere new — which is the day you most want it green.
-	known := map[string]bool{"linux": true, "darwin": true, "windows": true, "js": true, "wasip1": true}
-	if !known[osn] {
-		t.Errorf("os slug = %q, not one of %v", osn, known)
+	// DERIVED, not copied. This list used to be written out here, and its own
+	// comment said why that was wrong — "a test that hardcodes the platforms it
+	// expects to run on fails the day it runs somewhere new, which is the day
+	// you most want it green". It then did exactly that: the BSD lanes went red
+	// the day osSlug stopped calling OpenBSD "linux", on a change that made
+	// them MORE correct.
+	//
+	// isPlatformKey is the contract anyway — a slug a recipe cannot scope a
+	// block to is a slug that turns `freebsd:` into a project — so asserting it
+	// tests the real rule and cannot drift from the list it checks.
+	if !isPlatformKey(osn) {
+		t.Errorf("os slug = %q, which no recipe can scope a block to", osn)
 	}
 	if arch == "" {
 		t.Error("empty arch slug")
@@ -1431,5 +1436,23 @@ func TestRepoAbsentClassifiesByStatus(t *testing.T) {
 				t.Errorf("repoAbsent(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+// The BSD lanes run this suite on a real FreeBSD, OpenBSD and NetBSD, and
+// TestHostSlug is what they exercise first. Simulate each here so the darwin
+// and linux lanes fail too when the contract breaks — a rule enforced only on
+// the lane that happens to run there is a rule nobody sees break until that
+// lane is red for another reason.
+func TestHostSlugHoldsOnEveryLaneWeRunOn(t *testing.T) {
+	old := goos
+	defer func() { goos = old }()
+	for _, g := range []string{"linux", "darwin", "windows", "js", "wasip1",
+		"freebsd", "openbsd", "netbsd", "dragonfly", "android"} {
+		goos = func() string { return osSlug(g) }
+		osn, _ := HostSlug()
+		if !isPlatformKey(osn) {
+			t.Errorf("on %s the os slug is %q, which no recipe can scope a block to", g, osn)
+		}
 	}
 }
