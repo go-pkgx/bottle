@@ -1407,6 +1407,18 @@ func untar(r io.Reader, dest string) error {
 
 // writeVersionLinks creates v{maj}, v{maj}.{min} and v* -> v{full} symlinks
 // alongside the extracted prefix, matching pkgx's convenience aliases.
+//
+// An alias only ever ADVANCES. It used to be rewritten unconditionally, so the
+// last install won rather than the newest version — and installing an OLDER
+// line of a project demoted v* and v<major> onto it:
+//
+//	v*    -> v2.13.9   (after installing 2.13.9 beside 2.15.4)
+//	v2    -> v2.13.9
+//
+// Every consumer still bound to v2 then loads the older library, which is the
+// failure the ABI lines exist to end, arrived at from the other side. It was
+// always reachable — `pkgx +foo@1` after `+foo@2` did it — but a resolver that
+// installs two lines of one project on purpose makes it the ordinary case.
 func writeVersionLinks(pkgxDir string, r Resolved) {
 	dir := filepath.Join(pkgxDir, r.Project)
 	full := "v" + r.Version.Raw
@@ -1423,9 +1435,32 @@ func writeVersionLinks(pkgxDir string, r Resolved) {
 			continue
 		}
 		p := filepath.Join(dir, a)
+		if !aliasAdvances(dir, p, r.Version) {
+			continue
+		}
 		_ = os.Remove(p)
 		_ = os.Symlink(full, p)
 	}
+}
+
+// aliasAdvances reports whether an alias should be moved onto v.
+//
+// It should when there is nothing there, when what is there cannot be read as
+// a version, when it points at a version directory that is NOT installed — a
+// dangling alias is worse than a stale one, since nothing resolves through it
+// — and when v is newer than the version it names.
+func aliasAdvances(dir, alias string, v Ver) bool {
+	target, err := os.Readlink(alias)
+	if err != nil {
+		return true // absent, or not a symlink we wrote
+	}
+	if !strings.HasPrefix(target, "v") {
+		return true
+	}
+	if _, err := os.Stat(filepath.Join(dir, target)); err != nil {
+		return true // dangling: the version it names is gone
+	}
+	return cmpVer(v, ParseVer(strings.TrimPrefix(target, "v"))) > 0
 }
 
 // ABIProvidesAnnotation lists the sonames a bottle's shared libraries call
