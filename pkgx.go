@@ -1241,6 +1241,7 @@ func InstallFor(r Resolved, pkgxDir, osn, arch string) (bool, error) {
 		_ = os.Symlink(filepath.Base(src), prefix)
 	}
 	writeVersionLinks(pkgxDir, r)
+	writeABILinks(pkgxDir, r, osn, arch)
 	return true, nil
 }
 
@@ -1395,6 +1396,74 @@ func writeVersionLinks(pkgxDir string, r Resolved) {
 			continue
 		}
 		p := filepath.Join(dir, a)
+		_ = os.Remove(p)
+		_ = os.Symlink(full, p)
+	}
+}
+
+// ABIProvidesAnnotation lists the sonames a bottle's shared libraries call
+// themselves by, comma-separated and sorted. Written by bk at publish time.
+const ABIProvidesAnnotation = "org.go-pkgx.abi.provides"
+
+// abiAnnotations is a seam: the manifest read that answers what a bottle
+// provides.
+var abiAnnotations = func(project, tag, osn, arch string) map[string]string {
+	if !IsOCI(DistBase) {
+		return nil
+	}
+	c, err := ociClientForDist()
+	if err != nil {
+		return nil
+	}
+	ann, err := c.PlatformAnnotations(project, tag, osn, arch)
+	if err != nil {
+		return nil
+	}
+	return ann
+}
+
+// writeABILinks creates one `abi-<soname>` symlink per ABI the bottle provides,
+// beside the v* aliases.
+//
+// v<major> is where a reference is bound at load time, and it holds ONE
+// version. That is what lets a bottle follow a patch upgrade, and it is exactly
+// what breaks when a project changes its ABI INSIDE a major. Measured, both
+// lines installed into one store:
+//
+//	gnome.org/libxml2          unicode.org
+//	  v2     -> v2.15.4          v73  v73.2  v73.2.0
+//	  v2.13  -> v2.13.9          v78  v78.3  v78.3.0
+//	  v2.15  -> v2.15.4
+//
+// ICU coexists because it bumps its major with its soname. libxml2 does not:
+// 2.13.9 ships libxml2.2.dylib, 2.15.4 ships libxml2.16.dylib, and both claim
+// v2 — so a consumer of the other line cannot resolve. An abi-<soname> link is
+// the same late binding keyed on the thing that actually decides
+// compatibility.
+//
+// The sonames come from the annotation and never from filenames: zlib's real
+// file is libz.1.3.2.dylib and its soname is libz.1.dylib, the SYMLINK. Only
+// LC_ID_DYLIB / DT_SONAME answers, which is what bk reads at publish time.
+//
+// A bottle published before that annotation existed gets no abi- links, and
+// everything behaves as it did. This is deliberately inert on its own: what
+// reads the links comes later.
+func writeABILinks(pkgxDir string, r Resolved, osn, arch string) {
+	ann := abiAnnotations(r.Project, r.Version.tag(), osn, arch)
+	provides := ann[ABIProvidesAnnotation]
+	if provides == "" {
+		return
+	}
+	dir := filepath.Join(pkgxDir, r.Project)
+	full := "v" + r.Version.Raw
+	for _, soname := range strings.Split(provides, ",") {
+		soname = strings.TrimSpace(soname)
+		// A soname is a bare filename. Anything with a separator in it would
+		// put the link somewhere else entirely, so it is not one.
+		if soname == "" || strings.ContainsAny(soname, `/\`) || soname == "." || soname == ".." {
+			continue
+		}
+		p := filepath.Join(dir, "abi-"+soname)
 		_ = os.Remove(p)
 		_ = os.Symlink(full, p)
 	}
