@@ -998,6 +998,19 @@ func ResolveClosureFor(roots map[string]string, osn, arch string) ([]Resolved, e
 	for _, p := range order {
 		v, err := PickVersionForAll(p, constraints[p], osn, arch)
 		if err != nil {
+			// The demands do not intersect. Before refusing, ask whether they
+			// describe two different libraries rather than one contested
+			// version — libxml2 broke its ABI inside major 2, so ">=2.14" and
+			// "~2.13" are both right and name disjoint sonames.
+			if vers, lerr := pickABILines(p, constraints[p], osn, arch); lerr == nil {
+				for _, lv := range vers {
+					out = append(out, Resolved{p, lv})
+				}
+				continue
+			}
+			// Report the ORIGINAL refusal: why one version could not be found
+			// is what an operator can act on, and why it could not be split is
+			// a detail of the attempt to rescue it.
 			return nil, closureErr(p, constraints[p], askedBy[p], err)
 		}
 		out = append(out, Resolved{p, v})
@@ -1083,10 +1096,16 @@ type Edge struct {
 // Graph is a resolved closure with its edges kept, so a caller can show WHY a
 // version was chosen and not only WHICH.
 type Graph struct {
-	Roots    []string          // what was asked for, sorted
-	Versions map[string]Ver    // project -> the version the unifier picked
-	Deps     map[string][]Edge // project -> the edges leaving it, sorted by On
-	Asks     map[string][]Edge // project -> the edges pointing AT it
+	Roots    []string       // what was asked for, sorted
+	Versions map[string]Ver // project -> the version the unifier picked
+	// Lines holds every version of a project the closure carries, and is set
+	// ONLY where there is more than one: demands that do not intersect but
+	// name disjoint sonames are two ABI lines, not a conflict. Versions keeps
+	// the leading one, so a reader that does not know about lines still gets
+	// an answer rather than an arbitrary half.
+	Lines map[string][]Ver
+	Deps  map[string][]Edge // project -> the edges leaving it, sorted by On
+	Asks  map[string][]Edge // project -> the edges pointing AT it
 }
 
 // GraphFor resolves a closure and returns it with its structure intact.
@@ -1102,12 +1121,20 @@ func GraphFor(roots map[string]string, osn, arch string) (*Graph, error) {
 	g := &Graph{
 		Roots:    sortedKeys(roots),
 		Versions: map[string]Ver{},
+		Lines:    map[string][]Ver{},
 		Deps:     map[string][]Edge{},
 		Asks:     map[string][]Edge{},
 	}
 	for _, p := range order {
 		v, err := PickVersionForAll(p, constraints[p], osn, arch)
 		if err != nil {
+			if vers, lerr := pickABILines(p, constraints[p], osn, arch); lerr == nil {
+				// Versions keeps the LEADING line, so every existing reader
+				// still gets one answer; Lines is what says there were two.
+				g.Versions[p] = vers[0]
+				g.Lines[p] = vers
+				continue
+			}
 			return nil, closureErr(p, constraints[p], askedBy[p], err)
 		}
 		g.Versions[p] = v
