@@ -284,3 +284,57 @@ func TestProvideMachoSonameWhenTheLookupFails(t *testing.T) {
 		t.Errorf("diagnostics: %v", said)
 	}
 }
+
+// A file that CLAIMS to be a Mach-O and cannot be read is said out loud: what
+// it loads is then unknown rather than absent, and an unknown reference is how
+// a closure gets declared complete while it is not. A README is not a finding.
+func TestUnresolvedRefsNamesAMachoItCannotRead(t *testing.T) {
+	oldW := Warn
+	defer func() { Warn = oldW }()
+	var said []string
+	Warn = func(m string) { said = append(said, m) }
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "a.org", "v1")
+	if err := os.MkdirAll(prefix, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Truncated after the magic: a Mach-O by its own claim, unreadable in fact.
+	if err := os.WriteFile(filepath.Join(prefix, "broken"), []byte{0xcf, 0xfa, 0xed, 0xfe, 1, 2}, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(prefix, "README"), []byte("not a binary"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	unresolvedRefs([]string{prefix}, dir)
+	if len(said) != 1 || !strings.Contains(said[0], "broken") {
+		t.Errorf("diagnostics: %v", said)
+	}
+}
+
+// 0xcafebabe is a universal Mach-O AND a Java class file, and a store carrying
+// a JVM tool is full of the latter. Warning about every one of them would be
+// noise, and a warning that cries wolf is worse than none.
+func TestMachoMagicTellsAClassFileApart(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name string
+		head []byte
+		want machoKind
+	}{
+		{"universal", []byte{0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 2}, fatMachO},   // nfat_arch = 2
+		{"java class", []byte{0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 65}, notMachO}, // major 65 = Java 21
+		{"thin", []byte{0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0}, thinMachO},
+		{"text", []byte("hello wo"), notMachO},
+		{"too short", []byte{0xca}, notMachO},
+	} {
+		p := filepath.Join(dir, tc.name)
+		if err := os.WriteFile(p, tc.head, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := machoMagic(p); got != tc.want {
+			t.Errorf("%s: machoMagic = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
