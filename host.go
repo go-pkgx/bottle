@@ -25,6 +25,23 @@ import "runtime"
 // stay distinct from each other too: a WASI guest and a browser are different
 // hosts (different imports, different capabilities), so a module built for one
 // is not a bottle for the other.
+// osSlug maps Go's GOOS onto the OS name pkgx uses for a platform.
+//
+// The BSDs are named explicitly because the fallback below is the dangerous
+// kind of default: it does not refuse, it ANSWERS, and the answer was "linux".
+// A FreeBSD or OpenBSD host running this therefore called itself linux and
+// resolved linux bottles — ELF files it cannot load, discovered at the first
+// exec rather than at the resolution that chose them. Nothing said no.
+//
+// Naming them turns that into "no bottle for <project> (freebsd/aarch64)",
+// which is true, actionable, and arrives before anything is installed. There
+// are no freebsd bottles yet; saying so is the point.
+//
+// What still falls through is honest to state rather than paper over: android
+// is linux-like and the fallback suits it, while illumos, solaris, aix and
+// plan9 would be answered wrongly in the same silent way. They are not targets
+// today, and widening the list for a platform with no witness is how a guess
+// gets mistaken for support.
 func osSlug(g string) string {
 	switch g {
 	case "darwin":
@@ -35,6 +52,8 @@ func osSlug(g string) string {
 		return "js"
 	case "wasip1":
 		return "wasip1"
+	case "freebsd", "openbsd", "netbsd", "dragonfly":
+		return g
 	default:
 		return "linux"
 	}

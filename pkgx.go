@@ -939,7 +939,13 @@ func FetchMetaFor(project, osn, arch string) (deps map[string]string, provides [
 // dependency on a package called "js". The suite under js/wasm caught exactly
 // that: TestFetchMeta builds its fixture from HostSlug(), so the moment the host
 // reported "js" the block stopped being a platform.
-var platformKeys = []string{"linux", "darwin", "windows", "js", "wasip1"}
+// The BSDs are here because osSlug now answers with them, and the two lists
+// have to agree: a slug absent from this one turns a recipe's `freebsd:` block
+// into a dependency on a project called "freebsd". Measured before adding
+// them — the upstream pantry scopes no block to any BSD today, so this
+// enables a spelling rather than changing how one is read.
+var platformKeys = []string{"linux", "darwin", "windows", "js", "wasip1",
+	"freebsd", "openbsd", "netbsd", "dragonfly"}
 
 func isPlatformKey(k string) bool {
 	for _, p := range platformKeys {
