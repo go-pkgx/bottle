@@ -1131,12 +1131,33 @@ func closureErr(project string, constraints, askedBy []string, err error) error 
 	if len(constraints) < 2 {
 		return err
 	}
-	parts := make([]string, len(constraints))
-	for i := range constraints {
-		parts[i] = fmt.Sprintf("%s (%s)", constraints[i], askedBy[i])
-	}
-	return fmt.Errorf("%w; asked for by %s", err, strings.Join(parts, ", "))
+	return &ConflictError{Project: project, Constraints: constraints, AskedBy: askedBy, Err: err}
 }
+
+// ConflictError is a closure that has no solution: several demands on one
+// project whose intersection is empty.
+//
+// Structured rather than only formatted, because the interesting question is
+// never one closure. Asking how much of a pantry a chosen base reaches means
+// resolving hundreds of them and counting WHICH demand did the excluding —
+// libxml2 ~2.13 shutting out 68 recipes is a decision about what to rebuild,
+// and a caller should not have to parse a sentence to learn it.
+type ConflictError struct {
+	Project     string   // the project nobody could agree on
+	Constraints []string // every demand on it, in the order collected
+	AskedBy     []string // who made each; "requested" for a root
+	Err         error    // what the version pick said
+}
+
+func (e *ConflictError) Error() string {
+	parts := make([]string, len(e.Constraints))
+	for i := range e.Constraints {
+		parts[i] = fmt.Sprintf("%s (%s)", e.Constraints[i], e.AskedBy[i])
+	}
+	return fmt.Sprintf("%v; asked for by %s", e.Err, strings.Join(parts, ", "))
+}
+
+func (e *ConflictError) Unwrap() error { return e.Err }
 
 // sortedKeys is map iteration made reproducible. Go randomises it, and a
 // resolution order that changes between runs is a closure that changes between
