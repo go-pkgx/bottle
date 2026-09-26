@@ -131,7 +131,25 @@ func scanNeeded(prefixes []string) map[string]bool {
 // implicitRoots inspects a set of NEEDED sonames and returns the extra pkgx
 // bottles required to satisfy the implicit system libraries on a scratch image.
 // glibc is always included on linux (every dynamic ELF needs the loader+libc).
+//
+// ImplicitRootsOff turns the whole thing off, for the one case where the
+// premise in that sentence is false: a BOOTSTRAP host, where the machine has a
+// libc and the registry has no bottle of one yet. On linux/s390x the effect is
+// total rather than partial -- glibc is added unconditionally, so installing
+// ANY bottle fails before it starts, including one this factory has just built
+// and published:
+//
+//	pkgx: GET .../gnu.org/glibc/linux/s390x/versions.txt: Not Found
+//	bk: the tool environment failed: pkgx +gnu.org/m4@1
+//
+// It is off by default and must stay a deliberate act. A closure assembled
+// this way is complete only against THIS machine: the whole point of pulling
+// glibc is that a scratch image has none, and a bottle built under it owes its
+// libc to the host.
 func implicitRoots(needed map[string]bool) map[string]string {
+	if ImplicitRootsOff {
+		return nil
+	}
 	// glibc is the one implicit root whose newest is not always the right one:
 	// its loader refuses to run below the kernel floor it was built against, so
 	// the constraint is kernel-aware (and PKGX_GLIBC-pinnable). See glibc.go.

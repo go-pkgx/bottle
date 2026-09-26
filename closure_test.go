@@ -283,3 +283,52 @@ func TestHostProvidedSoname(t *testing.T) {
 		}
 	}
 }
+
+// TestImplicitRootsOff: the escape for a bootstrap host, where the machine has
+// a libc and the registry has no bottle of one.
+//
+// The default is the one that matters here, so it is asserted in the same test
+// as the override: a variable that silently defaulted to "off" would turn every
+// scratch-image closure into one that only works where it was assembled, and
+// nothing would say so.
+func TestImplicitRootsOff(t *testing.T) {
+	// C++ sonames, so all three roots are in play at once.
+	needed := map[string]bool{"libc.so.6": true, "libstdc++.so.6": true, "libatomic.so.1": true}
+	if len(implicitRoots(needed)) != 3 {
+		t.Fatalf("premise wrong: want glibc + libstdcxx + gcc, got %v", implicitRoots(needed))
+	}
+	t.Cleanup(func() { ImplicitRootsOff = false })
+	ImplicitRootsOff = true
+	if got := implicitRoots(needed); len(got) != 0 {
+		t.Errorf("implicitRoots = %v; want none when the host supplies them", got)
+	}
+}
+
+// And the variable that sets it, through the same reader every other knob goes
+// through — including the values that must NOT turn it on, since anything but
+// "none" leaving it off is what keeps a typo from quietly producing a closure
+// that works on one machine.
+func TestImplicitRootsEnv(t *testing.T) {
+	t.Cleanup(func() { ImplicitRootsOff = false })
+	for _, c := range []struct {
+		val  string
+		want bool
+	}{
+		{"none", true},
+		{"", false},
+		{"1", false},
+		{"true", false},
+		{"NONE", false},
+	} {
+		ImplicitRootsOff = false
+		applyEnv(func(k string) string {
+			if k == "PKGX_IMPLICIT_ROOTS" {
+				return c.val
+			}
+			return ""
+		})
+		if ImplicitRootsOff != c.want {
+			t.Errorf("PKGX_IMPLICIT_ROOTS=%q → off=%v, want %v", c.val, ImplicitRootsOff, c.want)
+		}
+	}
+}

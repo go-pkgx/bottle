@@ -66,6 +66,10 @@ var (
 	// version pkgx actually installs at build time. Overridable in tests.
 	UpstreamDist = "https://dist.pkgx.dev"
 
+	// ImplicitRootsOff drops the implicit system-library roots from closure
+	// completion. See implicitRoots; set from PKGX_IMPLICIT_ROOTS=none.
+	ImplicitRootsOff = false
+
 	// CacheBase is an OCI registry consulted for the BOTTLE ITSELF before
 	// DistBase — a pull-through cache next to the builders, so a job does not
 	// fetch llvm.org's ~1.7 GiB across the network again.
@@ -131,6 +135,17 @@ func applyEnv(get func(string) string) {
 	}
 	if p := get("PKGX_PANTRY"); p != "" {
 		PantryBase = strings.TrimRight(p, "/")
+	}
+	// PKGX_IMPLICIT_ROOTS=none says the MACHINE supplies the implicit system
+	// libraries -- libc, and the gcc runtime when something links it -- so a
+	// closure must not reach for bottles of them. It is named after the
+	// function it disables rather than after glibc, because it governs all
+	// three roots and a glibc-shaped name would under-describe two of them.
+	//
+	// "none" rather than an empty value, for the reason the overlay below
+	// gives, and "none" rather than a boolean so the two knobs read alike.
+	if r := get("PKGX_IMPLICIT_ROOTS"); r == "none" {
+		ImplicitRootsOff = true
 	}
 	// "none" is how a caller says "no overlay": an empty value cannot mean it,
 	// because an unset variable and one set to nothing are the same string here,
