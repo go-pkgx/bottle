@@ -125,7 +125,7 @@ func buildELF(needed []string, dynLink uint32) []byte {
 
 func TestSlugMapping(t *testing.T) {
 	if osSlug("darwin") != "darwin" || osSlug("windows") != "windows" ||
-		osSlug("linux") != "linux" || osSlug("freebsd") != "linux" {
+		osSlug("linux") != "linux" || osSlug("freebsd") != "freebsd" {
 		t.Error("osSlug mapping")
 	}
 	if archSlug("arm64") != "aarch64" || archSlug("amd64") != "x86-64" || archSlug("riscv64") != "riscv64" {

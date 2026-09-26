@@ -19,7 +19,17 @@ func TestOsSlugNamesTheWasmHosts(t *testing.T) {
 		{"darwin", "darwin"},
 		{"windows", "windows"},
 		{"linux", "linux"},
-		{"freebsd", "linux"}, // an exotic unix is closer to linux than to nothing
+		// A BSD is NAMED, not approximated. "An exotic unix is closer to linux
+		// than to nothing" was the old reading, and it is wrong in the one way
+		// that matters: a linux bottle on FreeBSD does not load. Nothing is a
+		// refusal you can act on; almost-right is an ELF that fails at the
+		// first exec, having been chosen by a resolution that said yes.
+		{"freebsd", "freebsd"},
+		{"openbsd", "openbsd"},
+		{"netbsd", "netbsd"},
+		{"dragonfly", "dragonfly"},
+		// android IS linux-like, and the fallback still suits it.
+		{"android", "linux"},
 	} {
 		if got := osSlug(tc.goos); got != tc.want {
 			t.Errorf("osSlug(%q) = %q, want %q", tc.goos, got, tc.want)
@@ -81,6 +91,21 @@ func TestPlatformKeysCoverEveryHostSlug(t *testing.T) {
 	for _, notAPlatform := range []string{"openssl.org", "gnu.org/glibc", "linuxbrew.org"} {
 		if isPlatformKey(notAPlatform) {
 			t.Errorf("%q was taken for a platform key", notAPlatform)
+		}
+	}
+}
+
+// The two lists have to agree. A slug osSlug can answer with, and that
+// platformKeys does not carry, turns a recipe's `freebsd:` block into a
+// dependency on a project called "freebsd" — the same way the js/wasm suite
+// found it for `js:`.
+func TestEverySlugIsAPlatformKey(t *testing.T) {
+	for _, goos := range []string{
+		"linux", "darwin", "windows", "js", "wasip1",
+		"freebsd", "openbsd", "netbsd", "dragonfly", "android",
+	} {
+		if slug := osSlug(goos); !isPlatformKey(slug) {
+			t.Errorf("osSlug(%q) = %q, which no recipe can scope a block to", goos, slug)
 		}
 	}
 }
