@@ -58,7 +58,10 @@ blk {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m["s"] != "text" || m["b"] != true || m["n"] != 3.0 || m["f"] != 1.5 || m["nul"] != nil {
+	// n is an int64 and f a float64: an integral number keeps its integerness,
+	// because yaml.Marshal renders a large float64 in exponent form and a
+	// version pinned to 20250127 must not become 2.0250127e+07.
+	if m["s"] != "text" || m["b"] != true || m["n"] != int64(3) || m["f"] != 1.5 || m["nul"] != nil {
 		t.Errorf("scalars: %#v", m)
 	}
 	if l, ok := m["list"].([]any); !ok || len(l) != 2 {
