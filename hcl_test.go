@@ -173,3 +173,33 @@ func TestHCLNestedErrorsSurface(t *testing.T) {
 		}
 	}
 }
+
+// A large integer must stay an integer. cty has one number type, so the choice
+// of Go type is ours, and float64 was the wrong one: yaml.Marshal writes
+// float64(20250127) as 2.0250127e+07, so a recipe pinning abseil.io to
+// 20250127 would have been handed 2.0250127e+07 at INSTALL time — a client
+// bug, not a conversion one. Found by converting all 1907 upstream recipes and
+// comparing each against itself.
+func TestHCLIntegersDoNotBecomeFloats(t *testing.T) {
+	y, err := HCLToYAML([]byte("build { dependencies = { \"abseil.io\" = 20250127 } }\n"), "x.hcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(y), "20250127") || strings.Contains(string(y), "e+07") {
+		t.Errorf("a large integer must survive:\n%s", y)
+	}
+	// And a genuine fraction stays one.
+	y, err = HCLToYAML([]byte("x = 1.5\n"), "x.hcl")
+	if err != nil || !strings.Contains(string(y), "1.5") {
+		t.Errorf("a fraction must survive: %s, %v", y, err)
+	}
+	// A number too large for an int64 falls back to a float rather than
+	// silently truncating.
+	m, err := HCLToMap([]byte("x = 99999999999999999999999\n"), "x.hcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m["x"].(float64); !ok {
+		t.Errorf("an out-of-range integer must fall back to float, got %T", m["x"])
+	}
+}
