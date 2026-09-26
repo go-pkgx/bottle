@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -171,5 +172,26 @@ func TestHCLNestedErrorsSurface(t *testing.T) {
 		if _, err := HCLToMap([]byte(src), "x.hcl"); err == nil {
 			t.Errorf("%s: want an error", name)
 		}
+	}
+}
+
+// The attribute conversion error, reached through the REAL function.
+//
+// No HCL text can produce it: with no evaluation context, a value an attribute
+// holds is always one hclCtyToGo renders. A hand-built body can, and that is
+// the difference between exercising this branch and writing a copy of it —
+// which is what a first attempt did, and a copy agrees with itself whatever
+// it says.
+func TestHCLAttributeConvertError(t *testing.T) {
+	capsule := cty.Capsule("thing", reflect.TypeOf(struct{}{}))
+	body := &hclsyntax.Body{
+		Attributes: hclsyntax.Attributes{
+			"x": &hclsyntax.Attribute{Name: "x", Expr: &hclsyntax.LiteralValueExpr{Val: cty.CapsuleVal(capsule, &struct{}{})}},
+		},
+	}
+	if _, err := hclBodyToMap(body); err == nil {
+		t.Error("an attribute whose value cannot be rendered must be refused")
+	} else if !strings.Contains(err.Error(), "x") {
+		t.Errorf("the message must name the attribute: %v", err)
 	}
 }
