@@ -400,15 +400,38 @@ func httpGet(url string) ([]byte, error) {
 		case err != nil:
 			lastErr = err
 		case retriable(status):
-			lastErr = fmt.Errorf("GET %s: %s", url, http.StatusText(status))
+			lastErr = &httpStatusError{url: url, status: status}
 		default:
-			return nil, fmt.Errorf("GET %s: %s", url, http.StatusText(status))
+			return nil, &httpStatusError{url: url, status: status}
 		}
 	}
 	return nil, lastErr
 }
 
 // httpGetOnce is a single attempt: the body on success, the status either way.
+// httpStatusError is a non-200 from a plain HTTP dist. It prints exactly what
+// the fmt.Errorf it replaced printed, so nothing reading the text changes; it
+// carries the STATUS so a caller does not have to read the text at all.
+//
+// repoAbsent, a few hundred lines below, says why that matters: "Classifying a
+// transport failure by the words in its message is how a transient error
+// becomes a different, silent answer." The OCI path already had a typed status
+// to ask. This path did not.
+type httpStatusError struct {
+	url    string
+	status int
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("GET %s: %s", e.url, http.StatusText(e.status))
+}
+
+// isNotFound reports a 404 from the plain-HTTP dist path.
+func isNotFound(err error) bool {
+	var e *httpStatusError
+	return errors.As(err, &e) && e.status == http.StatusNotFound
+}
+
 func httpGetOnce(url string) ([]byte, int, error) {
 	resp, err := HTTPClient.Get(url)
 	if err != nil {
@@ -470,10 +493,32 @@ func versionsForSourced(project, osn, arch string) ([]Ver, bool, error) {
 			return vs, true, nil
 		}
 		up, err := httpVersionsFor(UpstreamDist, project, osn, arch)
-		return up, false, err
+		return up, false, bothPlacesLooked(err, project, osn, arch)
 	}
 	vs, err := httpVersionsFor(DistBase, project, osn, arch)
 	return vs, false, err
+}
+
+// bothPlacesLooked rewrites the upstream fallback's 404 to say what it means.
+//
+// The raw error is a URL, and it reads like a network fault:
+//
+//	GET https://dist.pkgx.dev/llvm.org/linux/s390x/versions.txt: Not Found
+//
+// It is not one. Two registries were consulted and neither carries this
+// project for this platform — which on a NEW architecture is the normal state
+// of the world, not a failure to reach anything. Upstream publishes no s390x
+// at all, so every lookup that falls through here can only 404, and the URL
+// sends the reader to check their network instead of their platform.
+//
+// Only a "not found" is rewritten. A timeout or a 500 IS about reaching the
+// server, and saying otherwise would move the lie rather than remove it.
+func bothPlacesLooked(err error, project, osn, arch string) error {
+	if err == nil || !isNotFound(err) {
+		return err
+	}
+	return fmt.Errorf("no %s for %s/%s: neither %s nor %s publishes it (%w)",
+		project, osn, arch, DistBase, UpstreamDist, err)
 }
 
 // repoAbsent reports whether err signals that the OCI registry simply does not
