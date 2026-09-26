@@ -2,6 +2,7 @@ package bottle
 
 import (
 	"fmt"
+	"math/big"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -92,7 +93,25 @@ func hclCtyToGo(v cty.Value) (any, error) {
 	case t == cty.Bool:
 		return v.True(), nil
 	case t == cty.Number:
-		f, _ := v.AsBigFloat().Float64()
+		// An integral number comes back as an int, not a float.
+		//
+		// cty has one number type, so the choice is ours — and float64 was the
+		// wrong one. yaml.Marshal writes float64(20250127) as 2.0250127e+07,
+		// which decodes as a float, and a recipe asking for abseil.io at
+		// version 20250127 would have been handed 2.0250127e+07 at INSTALL
+		// time. Found by converting the whole upstream pantry and comparing
+		// each recipe against itself; dozzle.dev is the one that has it.
+		//
+		// A whole number that was written 11.0 still arrives as 11, because
+		// HCL cannot tell the two apart. That is a limit of the format, and
+		// the four recipes it affects keep their YAML.
+		bf := v.AsBigFloat()
+		if bf.IsInt() {
+			if i, acc := bf.Int64(); acc == big.Exact {
+				return i, nil
+			}
+		}
+		f, _ := bf.Float64()
 		return f, nil
 	case t.IsTupleType(), t.IsListType(), t.IsSetType():
 		var out []any
