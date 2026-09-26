@@ -14,6 +14,14 @@ import (
 // where no linker would produce an ELF at all.
 func writeDynELF(t *testing.T, path, soname string, needed ...string) {
 	t.Helper()
+	writeDynELFPaths(t, path, soname, nil, nil, needed...)
+}
+
+// writeDynELFPaths is writeDynELF plus DT_RUNPATH and DT_RPATH. They are
+// ordinary dynamic entries pointing into .dynstr, exactly like DT_NEEDED, so
+// the only thing that changes is which tag they carry.
+func writeDynELFPaths(t *testing.T, path, soname string, runpath, rpath []string, needed ...string) {
+	t.Helper()
 	le := binary.LittleEndian
 
 	// .dynstr: a leading NUL, then each name NUL-terminated.
@@ -36,6 +44,12 @@ func writeDynELF(t *testing.T, path, soname string, needed ...string) {
 	}
 	if soname != "" {
 		ent(elf.DT_SONAME, off(soname))
+	}
+	for _, r := range runpath {
+		ent(elf.DT_RUNPATH, off(r))
+	}
+	for _, r := range rpath {
+		ent(elf.DT_RPATH, off(r))
 	}
 	// DT_STRTAB/DT_STRSZ are what debug/elf follows to read the names.
 	const (
@@ -156,5 +170,147 @@ func TestSonameComesFromOutside(t *testing.T) {
 		if SonameComesFromOutside(s) {
 			t.Errorf("%s was excused, and it is a closure's own business", s)
 		}
+	}
+}
+
+// writeInterpELF builds a 64-bit little-endian ELF whose only program header
+// is PT_INTERP. debug/elf reads Progs from the program-header table alone, so
+// no sections are needed — and a file nothing will ever exec does not have to
+// be loadable to be readable.
+func writeInterpELF(t *testing.T, path, interp string) {
+	t.Helper()
+	writeInterpELFAs(t, path, interp, false, 0)
+}
+
+// writeInterpELFAs adds the two shapes the happy path never produces: a
+// leading PT_LOAD, so the scan has something to skip, and an oversized
+// p_filesz, so the segment read runs off the end of the file.
+func writeInterpELFAs(t *testing.T, path, interp string, leadingLoad bool, extraFilesz uint64) {
+	t.Helper()
+	le := binary.LittleEndian
+	const ehSize, phEntSz = 64, 56
+	str := append([]byte(interp), 0)
+	nph := uint16(1)
+	if leadingLoad {
+		nph = 2
+	}
+	phOff := uint64(ehSize)
+	strOff := phOff + uint64(nph)*phEntSz
+
+	buf := make([]byte, strOff+uint64(len(str)))
+	copy(buf, []byte{0x7f, 'E', 'L', 'F', 2, 1, 1, 0})
+	le.PutUint16(buf[16:], uint16(elf.ET_EXEC))
+	le.PutUint16(buf[18:], uint16(elf.EM_X86_64))
+	le.PutUint32(buf[20:], 1)
+	le.PutUint64(buf[32:], phOff) // e_phoff
+	le.PutUint16(buf[52:], ehSize)
+	le.PutUint16(buf[54:], phEntSz) // e_phentsize
+	le.PutUint16(buf[56:], nph)     // e_phnum
+
+	ph := buf[phOff:]
+	if leadingLoad {
+		le.PutUint32(ph[0:], uint32(elf.PT_LOAD))
+		ph = buf[phOff+phEntSz:]
+	}
+	le.PutUint32(ph[0:], uint32(elf.PT_INTERP))
+	le.PutUint64(ph[8:], strOff)                        // p_offset
+	le.PutUint64(ph[32:], uint64(len(str))+extraFilesz) // p_filesz
+	copy(buf[strOff:], str)
+
+	if err := os.WriteFile(path, buf, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestELFInterp: the loader path a bottle names is the first of Nix's three
+// bootstrap invariants — the final environment must not REFERENCE the seed.
+// A PT_INTERP under /lib64 says the MACHINE has the loader, not the store.
+func TestELFInterp(t *testing.T) {
+	dir := t.TempDir()
+	want := "/pkgx/gnu.org/glibc/v2.44.0/lib/glibc-2.44/ld-linux-x86-64.so.2"
+	p := filepath.Join(dir, "sovereign")
+	writeInterpELF(t, p, want)
+	got, err := ELFInterp(p)
+	if err != nil || got != want {
+		t.Errorf("ELFInterp = %q, %v; want %q", got, err, want)
+	}
+
+	// A file with no PT_INTERP is static, not broken. Reusing the dynamic
+	// fixture, which builds sections and no program headers at all.
+	q := filepath.Join(dir, "static.so")
+	writeDynELF(t, q, "libx.so.1", "libc.so.6")
+	if got, err := ELFInterp(q); err != nil || got != "" {
+		t.Errorf("ELFInterp on a file with no PT_INTERP = %q, %v; want \"\", nil", got, err)
+	}
+
+	// Something that is not an ELF must FAIL, not answer "". "Could not read"
+	// is not "names no interpreter", and a purity check that conflated them
+	// would pass every file it could not open.
+	r := filepath.Join(dir, "script")
+	if err := os.WriteFile(r, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ELFInterp(r); err == nil {
+		t.Error("ELFInterp must refuse a non-ELF rather than report no interpreter")
+	}
+}
+
+// TestELFRunpath: the two tags are returned SEPARATELY because they are
+// consulted on opposite sides of LD_LIBRARY_PATH, and a file carrying both is
+// answering two different questions.
+func TestELFRunpath(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "both.so")
+	writeDynELFPaths(t, p, "libx.so.1",
+		[]string{"$ORIGIN/../lib"},
+		[]string{"/usr/lib/x86_64-linux-gnu"},
+		"libc.so.6")
+	run, rp, err := ELFRunpath(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(run) != 1 || run[0] != "$ORIGIN/../lib" {
+		t.Errorf("DT_RUNPATH = %v", run)
+	}
+	if len(rp) != 1 || rp[0] != "/usr/lib/x86_64-linux-gnu" {
+		t.Errorf("DT_RPATH = %v", rp)
+	}
+
+	// Neither tag is absence, not failure.
+	q := filepath.Join(dir, "none.so")
+	writeDynELF(t, q, "libx.so.1", "libc.so.6")
+	if run, rp, err := ELFRunpath(q); err != nil || len(run) != 0 || len(rp) != 0 {
+		t.Errorf("ELFRunpath with neither tag = %v, %v, %v", run, rp, err)
+	}
+
+	// And a non-ELF fails, for the reason ELFInterp's does.
+	r := filepath.Join(dir, "script")
+	if err := os.WriteFile(r, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ELFRunpath(r); err == nil {
+		t.Error("ELFRunpath must refuse a non-ELF")
+	}
+}
+
+// The two shapes the happy path cannot reach: a program header table whose
+// PT_INTERP is not first, and a segment whose declared size runs past the end
+// of the file.
+func TestELFInterpSkipsAndRefuses(t *testing.T) {
+	dir := t.TempDir()
+
+	behind := filepath.Join(dir, "behind-a-load")
+	writeInterpELFAs(t, behind, "/pkgx/loader", true, 0)
+	if got, err := ELFInterp(behind); err != nil || got != "/pkgx/loader" {
+		t.Errorf("a PT_INTERP behind a PT_LOAD = %q, %v", got, err)
+	}
+
+	// A truncated segment must be an error, not a short string: silently
+	// returning what fitted would let a purity check pass on a path it only
+	// read half of.
+	short := filepath.Join(dir, "truncated")
+	writeInterpELFAs(t, short, "/pkgx/loader", false, 4096)
+	if got, err := ELFInterp(short); err == nil {
+		t.Errorf("ELFInterp on a segment past EOF = %q, nil; want an error", got)
 	}
 }
