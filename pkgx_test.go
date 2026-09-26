@@ -1456,3 +1456,57 @@ func TestHostSlugHoldsOnEveryLaneWeRunOn(t *testing.T) {
 		}
 	}
 }
+
+// TestUpstreamFallback404SaysWhatItMeans.
+//
+// The raw error is a URL and reads like a network fault:
+//
+//	GET https://dist.pkgx.dev/llvm.org/linux/s390x/versions.txt: Not Found
+//
+// It is not one. Two registries were consulted and neither carries the project
+// for that platform — on a new architecture the normal state of the world, not
+// a failure to reach anything. It cost a build run to read correctly.
+func TestUpstreamFallback404SaysWhatItMeans(t *testing.T) {
+	notFound := &httpStatusError{url: "https://dist.pkgx.dev/llvm.org/linux/s390x/versions.txt", status: 404}
+	got := bothPlacesLooked(notFound, "llvm.org", "linux", "s390x")
+	for _, want := range []string{"llvm.org", "linux/s390x", DistBase, UpstreamDist} {
+		if !strings.Contains(got.Error(), want) {
+			t.Errorf("message must name %q: %v", want, got)
+		}
+	}
+	// The original survives underneath, so nothing that inspected it stops
+	// working.
+	if !errors.Is(got, error(notFound)) {
+		t.Errorf("the original error must be wrapped: %v", got)
+	}
+
+	// A timeout or a 500 IS about reaching the server. Rewriting those would
+	// move the lie rather than remove it.
+	for _, e := range []error{
+		&httpStatusError{url: "u", status: 500},
+		errors.New("dial tcp: i/o timeout"),
+	} {
+		if got := bothPlacesLooked(e, "llvm.org", "linux", "s390x"); got.Error() != e.Error() {
+			t.Errorf("a transport failure must pass through unchanged: %v", got)
+		}
+	}
+	if bothPlacesLooked(nil, "p", "linux", "x86-64") != nil {
+		t.Error("nil must stay nil")
+	}
+}
+
+// And the type behind it: the message is unchanged from the fmt.Errorf it
+// replaced, so anything reading the text is unaffected, while the status is
+// now available without reading the text.
+func TestHTTPStatusErrorKeepsItsWording(t *testing.T) {
+	e := &httpStatusError{url: "https://x/y", status: 404}
+	if e.Error() != "GET https://x/y: Not Found" {
+		t.Errorf("wording changed: %q", e.Error())
+	}
+	if !isNotFound(e) {
+		t.Error("isNotFound must see a 404")
+	}
+	if isNotFound(&httpStatusError{url: "u", status: 503}) || isNotFound(errors.New("boom")) {
+		t.Error("isNotFound must not claim anything else")
+	}
+}
