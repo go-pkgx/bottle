@@ -4,6 +4,7 @@ import (
 	"debug/elf"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -126,6 +127,32 @@ func scanNeeded(prefixes []string) map[string]bool {
 		})
 	}
 	return needed
+}
+
+// SonameProviders is every project the soname maps can pull into a closure:
+// the bounded set of dependencies a RECIPE never mentions.
+//
+// A dependency discovered this way exists only in the compiled artefact. perl
+// declares nothing about libcrypt, glibc 2.38+ stopped providing it, and the
+// map above supplies github.com/besser82/libxcrypt when a perl binary turns
+// out to need it. Anything planning a build order from recipes alone is blind
+// to that channel, and finds out one failed build at a time.
+//
+// Sorted and deduplicated, so a caller can diff it against an order it
+// computed and see what that order cannot have known.
+func SonameProviders() []string {
+	seen := map[string]bool{}
+	for _, m := range []map[string]string{sonameProject, sonamePrefixProject} {
+		for _, p := range m {
+			seen[p] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // implicitRoots inspects a set of NEEDED sonames and returns the extra pkgx
