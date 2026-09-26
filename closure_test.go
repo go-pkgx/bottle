@@ -332,3 +332,32 @@ func TestImplicitRootsEnv(t *testing.T) {
 		}
 	}
 }
+
+// TestSonameProviders: the bounded set of dependencies a recipe never
+// mentions. A seed order computed from recipes alone cannot see any of them —
+// perl declares nothing about libcrypt, and a perl build stopped dead on
+// github.com/besser82/libxcrypt because of it.
+func TestSonameProviders(t *testing.T) {
+	got := SonameProviders()
+	if len(got) < 10 {
+		t.Fatalf("suspiciously few providers: %v", got)
+	}
+	idx := map[string]bool{}
+	for _, p := range got {
+		idx[p] = true
+	}
+	// The case that prompted this, and one from the PREFIX map, so a future
+	// refactor cannot quietly drop half the answer.
+	for _, want := range []string{"github.com/besser82/libxcrypt", "zlib.net", "openssl.org"} {
+		if !idx[want] {
+			t.Errorf("missing %q from %v", want, got)
+		}
+	}
+	// Sorted and deduplicated: openssl.org answers both libssl and libcrypto,
+	// and a caller diffing this against its own list needs it to appear once.
+	for i := 1; i < len(got); i++ {
+		if got[i] <= got[i-1] {
+			t.Errorf("not sorted/deduplicated at %d: %q then %q", i, got[i-1], got[i])
+		}
+	}
+}
