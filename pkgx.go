@@ -162,15 +162,27 @@ func applyEnv(get func(string) string) {
 	}
 }
 
-// fetchRecipe returns a project's package.yml, trying PantryOverlay first (when
-// set) and falling back to PantryBase when the overlay lacks that project.
+// fetchRecipe returns a project's recipe as YAML bytes, trying PantryOverlay
+// first (when set) and falling back to PantryBase when the overlay lacks that
+// project. A package.hcl is converted, so callers see one format.
 func fetchRecipe(project string) ([]byte, error) {
-	if PantryOverlay != "" {
-		if body, err := httpGet(fmt.Sprintf("%s/%s/package.yml", PantryOverlay, project)); err == nil {
+	for _, base := range []string{PantryOverlay, PantryBase} {
+		if base == "" {
+			continue
+		}
+		// HCL first, and only then YAML. Our own overlay is written in HCL;
+		// upstream's pantry is YAML. Asking for the yaml alone is how an
+		// override silently stops applying — the overlay 404s, resolution
+		// falls through to upstream, and the recipe that builds is the one the
+		// overlay exists to replace. Nothing fails; the wrong thing is built.
+		if body, err := httpGet(fmt.Sprintf("%s/%s/package.hcl", base, project)); err == nil {
+			return HCLToYAML(body, project+"/package.hcl")
+		}
+		if body, err := httpGet(fmt.Sprintf("%s/%s/package.yml", base, project)); err == nil {
 			return body, nil
 		}
 	}
-	return httpGet(fmt.Sprintf("%s/%s/package.yml", PantryBase, project))
+	return nil, fmt.Errorf("no recipe for %s in %s or %s", project, PantryOverlay, PantryBase)
 }
 
 // Dir resolves the bottle store (PKGX_DIR, default ~/.pkgx).
