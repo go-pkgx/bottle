@@ -384,7 +384,22 @@ func docDiff(a, b any, path string) string {
 			x, inA := av[k]
 			y, inB := bv[k]
 			if inA != inB {
-				return fmt.Sprintf("%s.%s: present on one side only", path, k)
+				// WHICH side, not "one side". Both arguments are named
+				// documents to whoever called DocDiff, and for the caller this
+				// was written for the direction IS the answer: comparing the
+				// overlay recipe a consumer resolves from against the pantry
+				// recipe the factory builds, a key the overlay ADDS is the
+				// overlay doing its job, and a key the overlay has LOST is
+				// drift. "Present on one side only" made those two read the
+				// same, and 25 projects had to be opened by hand to tell them
+				// apart.
+				//
+				// The wording follows "%v became %v" elsewhere here: the first
+				// argument is the before, the second the after.
+				if inA {
+					return fmt.Sprintf("%s.%s: dropped", path, k)
+				}
+				return fmt.Sprintf("%s.%s: added", path, k)
 			}
 			if d := docDiff(x, y, path+"."+k); d != "" {
 				return d

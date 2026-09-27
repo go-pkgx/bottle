@@ -342,3 +342,25 @@ func TestDocDiffIsExported(t *testing.T) {
 		t.Errorf("the path must be named: %q", d)
 	}
 }
+
+// WHICH side, not "one side". Comparing the overlay recipe a consumer resolves
+// from against the pantry recipe the factory builds, a key the overlay ADDS is
+// the overlay doing its job and a key it has LOST is drift — and a report that
+// spells those the same way is a report somebody has to open 25 files to read.
+func TestDocDiffSaysWhichSideAKeyIsOn(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		a, b map[string]any
+		want string
+	}{
+		{"gone from the second", map[string]any{"dependencies": 1}, map[string]any{}, "..dependencies: dropped"},
+		{"new in the second", map[string]any{}, map[string]any{"dependencies": 1}, "..dependencies: added"},
+		{"nested", map[string]any{"build": map[string]any{"env": 1}}, map[string]any{"build": map[string]any{}}, "..build.env: dropped"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := DocDiff(tc.a, tc.b); got != tc.want {
+				t.Errorf("DocDiff = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
