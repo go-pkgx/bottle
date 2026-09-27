@@ -1615,3 +1615,43 @@ func TestReduceDepsPlatformBlockWinsDeterministically(t *testing.T) {
 		t.Errorf("a malformed platform block must be skipped: %v", got)
 	}
 }
+
+// Two branches of versionsForSourced fall back to the upstream dist, and only
+// the second one said what its 404 meant. The FIRST is the one a new
+// architecture hits: on a seed registry nothing is published, so a project is
+// not a repository at all and the walk arrives there, never at the other. So
+// the message written for a new architecture was missing from the case a new
+// architecture actually produces —
+//
+//	resolve deps: GET https://dist.pkgx.dev/llvm.org/linux/s390x/versions.txt: Not Found
+//
+// which is the exact string bothPlacesLooked exists to stop anyone reading as
+// a network fault. Tested here on versionsForSourced rather than on the helper:
+// the helper was already tested, and the helper was never the defect.
+func TestVersionsForSourcedExplainsBothFallbacks(t *testing.T) {
+	// An OCI registry that knows nothing: the tag listing 404s NAME_UNKNOWN,
+	// which is repoAbsent — the first branch.
+	reg := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"errors":[{"code":"NAME_UNKNOWN"}]}`))
+	}))
+	defer reg.Close()
+	// An upstream dist with no s390x, which is upstream's actual state.
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer up.Close()
+
+	withDist(t, "oci://"+strings.TrimPrefix(reg.URL, "http://")+"/go-pkgx/packages")
+	oldUp := UpstreamDist
+	UpstreamDist = up.URL
+	t.Cleanup(func() { UpstreamDist = oldUp })
+
+	_, _, err := versionsForSourced("llvm.org", "linux", "s390x")
+	if err == nil {
+		t.Fatal("a project neither registry carries must be an error")
+	}
+	if !strings.Contains(err.Error(), "neither") {
+		t.Errorf("the error must say both places were looked, got: %v", err)
+	}
+}
