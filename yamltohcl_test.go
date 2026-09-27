@@ -329,3 +329,16 @@ func TestYAMLToHCLRefusesANonMapping(t *testing.T) {
 		t.Errorf("the refusal must name the file and the cause: %v", err)
 	}
 }
+
+// DocDiff is the exported face of docDiff, for a caller that has to name the
+// key rather than only report that two recipes differ.
+func TestDocDiffIsExported(t *testing.T) {
+	if d := DocDiff(map[string]any{"a": 1}, map[string]any{"a": 1}); d != "" {
+		t.Errorf("equal documents: %q", d)
+	}
+	d := DocDiff(map[string]any{"build": map[string]any{"script": "make"}},
+		map[string]any{"build": map[string]any{"script": "gmake"}})
+	if !strings.Contains(d, ".build.script") {
+		t.Errorf("the path must be named: %q", d)
+	}
+}
