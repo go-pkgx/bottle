@@ -526,7 +526,19 @@ func versionsForSourced(project, osn, arch string) ([]Ver, bool, error) {
 			// Genuine transient/auth errors still propagate.
 			if repoAbsent(err) {
 				up, err := httpVersionsFor(UpstreamDist, project, osn, arch)
-				return up, false, err
+				// bothPlacesLooked here TOO. Two branches fall back to the
+				// upstream dist and only the one below said what its 404
+				// meant, so the message written for a new architecture was
+				// missing from the case a new architecture actually hits: on a
+				// seed registry nothing is published, so a project is not a
+				// repository AT ALL and the walk arrives here, never below.
+				// What a run printed was
+				//
+				//	resolve deps: GET https://dist.pkgx.dev/llvm.org/linux/s390x/versions.txt: Not Found
+				//
+				// which is the exact string bothPlacesLooked exists to stop
+				// anyone reading as a network fault.
+				return up, false, bothPlacesLooked(err, project, osn, arch)
 			}
 			return nil, false, err
 		}
