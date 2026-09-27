@@ -74,7 +74,7 @@ func HCLToMap(src []byte, filename string) (map[string]any, error) {
 func hclBodyToMap(body *hclsyntax.Body) (map[string]any, error) {
 	out := make(map[string]any, len(body.Attributes)+len(body.Blocks))
 	for name, attr := range body.Attributes {
-		v, diags := attr.Expr.Value(nil)
+		v, diags := attr.Expr.Value(recipeEvalContext())
 		if diags.HasErrors() {
 			return nil, fmt.Errorf("hcl: %s: %s", name, diags.Error())
 		}
