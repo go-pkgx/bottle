@@ -342,6 +342,11 @@ func rawListVersions(root *yaml.Node) []any {
 	return nil
 }
 
+// DocDiff is docDiff, exported: a caller comparing two recipes needs to say
+// WHICH key parted, and a second implementation of this walk would be a second
+// opinion about what a recipe means.
+func DocDiff(a, b any) string { return docDiff(a, b, "") }
+
 // docDiff describes the first place two decoded documents part.
 //
 // Numbers are compared by what they RENDER, because the two decoders disagree
