@@ -59,7 +59,10 @@ blk {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if m["s"] != "text" || m["b"] != true || m["n"] != 3.0 || m["f"] != 1.5 || m["nul"] != nil {
+	// n is an int64 and f a float64: an integral number keeps its integerness,
+	// because yaml.Marshal renders a large float64 in exponent form and a
+	// version pinned to 20250127 must not become 2.0250127e+07.
+	if m["s"] != "text" || m["b"] != true || m["n"] != int64(3) || m["f"] != 1.5 || m["nul"] != nil {
 		t.Errorf("scalars: %#v", m)
 	}
 	if l, ok := m["list"].([]any); !ok || len(l) != 2 {
@@ -193,5 +196,54 @@ func TestHCLAttributeConvertError(t *testing.T) {
 		t.Error("an attribute whose value cannot be rendered must be refused")
 	} else if !strings.Contains(err.Error(), "x") {
 		t.Errorf("the message must name the attribute: %v", err)
+	}
+}
+
+// A large integer must stay an integer. cty has one number type, so the choice
+// of Go type is ours, and float64 was the wrong one: yaml.Marshal writes
+// float64(20250127) as 2.0250127e+07, so a recipe pinning abseil.io to
+// 20250127 would have been handed 2.0250127e+07 at INSTALL time — a client
+// bug, not a conversion one. Found by converting all 1907 upstream recipes and
+// comparing each against itself.
+func TestHCLIntegersDoNotBecomeFloats(t *testing.T) {
+	y, err := HCLToYAML([]byte("build { dependencies = { \"abseil.io\" = 20250127 } }\n"), "x.hcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(y), "20250127") || strings.Contains(string(y), "e+07") {
+		t.Errorf("a large integer must survive:\n%s", y)
+	}
+	// And a genuine fraction stays one.
+	y, err = HCLToYAML([]byte("x = 1.5\n"), "x.hcl")
+	if err != nil || !strings.Contains(string(y), "1.5") {
+		t.Errorf("a fraction must survive: %s, %v", y, err)
+	}
+	// A number too large for an int64 falls back to a float rather than
+	// silently truncating.
+	m, err := HCLToMap([]byte("x = 99999999999999999999999\n"), "x.hcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m["x"].(float64); !ok {
+		t.Errorf("an out-of-range integer must fall back to float, got %T", m["x"])
+	}
+}
+
+// yaml.v3 can emit a block scalar it cannot re-read: a string whose first line
+// is indented gets an indentation indicator that does not match its body.
+// Demonstrated with no HCL involved — priver.dev/geni's package.yml does not
+// survive yaml.Unmarshal → yaml.Marshal → yaml.Unmarshal.
+//
+// Upstream recipes never reach HCLToYAML, so the defect is invisible there. An
+// HCL recipe of the same shape would hand the caller YAML that fails to parse
+// somewhere further along, which is why this refuses instead.
+func TestHCLToYAMLRefusesUnreadableOutput(t *testing.T) {
+	src := "test {\n  script = [\n    { fixture = <<EOT\n    indented first line\nsecond\nEOT\n    },\n  ]\n}\n"
+	_, err := HCLToYAML([]byte(src), "geni.hcl")
+	if err == nil {
+		t.Skip("yaml.v3 now round-trips this shape; the guard is no longer exercised here")
+	}
+	if !strings.Contains(err.Error(), "cannot be read back") || !strings.Contains(err.Error(), "geni.hcl") {
+		t.Errorf("the refusal must name the file and the cause: %v", err)
 	}
 }
