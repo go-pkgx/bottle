@@ -247,3 +247,39 @@ func TestHCLToYAMLRefusesUnreadableOutput(t *testing.T) {
 		t.Errorf("the refusal must name the file and the cause: %v", err)
 	}
 }
+
+// A recipe the client cannot read is an ERROR naming the project.
+//
+// The overlay is HCL and upstream is converted to HCL on the way in, so this
+// is the one place a malformed recipe surfaces — and it has to say which
+// project, because the caller is resolving a closure and "parse error" alone
+// names none of the dozen recipes it just fetched.
+func TestRecipeDocRefusesUnreadableHCL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/pantry/broken.org/package.hcl":
+			fmt.Fprint(w, "build { script = \n")
+		case "/pantry/notyaml.org/package.yml":
+			fmt.Fprint(w, "\tthis is not yaml\n")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	o, p := PantryOverlay, PantryBase
+	defer func() { PantryOverlay, PantryBase = o, p }()
+	PantryOverlay, PantryBase = "", srv.URL+"/pantry"
+
+	if _, _, err := FetchMetaFor("broken.org", "linux", "x86-64"); err == nil {
+		t.Error("hcl that does not parse must be an error")
+	} else if !strings.Contains(err.Error(), "broken.org") {
+		t.Errorf("the error must name the project: %v", err)
+	}
+	// And upstream YAML that does not convert fails the same way, at the same
+	// place — which is the point of converting on the way in.
+	if _, _, err := FetchMetaFor("notyaml.org", "linux", "x86-64"); err == nil {
+		t.Error("yaml that does not convert must be an error")
+	} else if !strings.Contains(err.Error(), "notyaml.org") {
+		t.Errorf("the error must name the project: %v", err)
+	}
+}
