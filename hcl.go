@@ -30,7 +30,34 @@ func HCLToYAML(src []byte, filename string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return yaml.Marshal(doc)
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		// Unreachable: HCLToMap yields only string, bool, int64, float64, nil,
+		// []any and map[string]any, and yaml.Marshal renders all of them. Kept
+		// because the two can drift — a new cty case added above would arrive
+		// here first — and not faked into coverage, because a test of a copy
+		// of these three lines would agree with itself whatever they said.
+		return nil, err
+	}
+	// Read back what we just wrote.
+	//
+	// yaml.v3 can emit a block scalar it cannot itself re-read: a string whose
+	// first line is indented gets an explicit indentation indicator that does
+	// not match the body, and the document then fails with "did not find
+	// expected key". Demonstrated with no HCL involved at all —
+	// priver.dev/geni's package.yml does not survive
+	// yaml.Unmarshal → yaml.Marshal → yaml.Unmarshal.
+	//
+	// Upstream recipes never reach this path, so the defect is invisible
+	// there. An HCL recipe with the same shape would hand the caller YAML that
+	// silently fails to parse somewhere further along. Saying so here costs
+	// one decode and names the file.
+	var check any
+	if err := yaml.Unmarshal(out, &check); err != nil {
+		return nil, fmt.Errorf("hcl: %s: converts to YAML that cannot be read back (%w) — "+
+			"a string whose first line is indented is the known cause", filename, err)
+	}
+	return out, nil
 }
 
 // HCLToMap parses package.hcl into the generic document shape a package.yml

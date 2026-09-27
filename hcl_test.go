@@ -228,3 +228,22 @@ func TestHCLIntegersDoNotBecomeFloats(t *testing.T) {
 		t.Errorf("an out-of-range integer must fall back to float, got %T", m["x"])
 	}
 }
+
+// yaml.v3 can emit a block scalar it cannot re-read: a string whose first line
+// is indented gets an indentation indicator that does not match its body.
+// Demonstrated with no HCL involved — priver.dev/geni's package.yml does not
+// survive yaml.Unmarshal → yaml.Marshal → yaml.Unmarshal.
+//
+// Upstream recipes never reach HCLToYAML, so the defect is invisible there. An
+// HCL recipe of the same shape would hand the caller YAML that fails to parse
+// somewhere further along, which is why this refuses instead.
+func TestHCLToYAMLRefusesUnreadableOutput(t *testing.T) {
+	src := "test {\n  script = [\n    { fixture = <<EOT\n    indented first line\nsecond\nEOT\n    },\n  ]\n}\n"
+	_, err := HCLToYAML([]byte(src), "geni.hcl")
+	if err == nil {
+		t.Skip("yaml.v3 now round-trips this shape; the guard is no longer exercised here")
+	}
+	if !strings.Contains(err.Error(), "cannot be read back") || !strings.Contains(err.Error(), "geni.hcl") {
+		t.Errorf("the refusal must name the file and the cause: %v", err)
+	}
+}
