@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	yaml "gopkg.in/yaml.v3"
 	"oras.land/oras-go/v2/registry/remote/errcode"
 )
 
@@ -544,24 +543,85 @@ func TestPlatformMatches(t *testing.T) {
 	}
 }
 
-func TestDecodeProvidesScalar(t *testing.T) {
-	// a scalar node is neither a list nor a platform map -> nil.
-	var n yaml.Node
-	if err := yaml.Unmarshal([]byte("just-a-string\n"), &n); err != nil {
-		t.Fatal(err)
-	}
-	if got := decodeProvides(*n.Content[0]); got != nil {
-		t.Errorf("want nil, got %v", got)
+func TestDecodeProvides(t *testing.T) {
+	osn, _ := HostSlug()
+	for name, c := range map[string]struct {
+		in   any
+		want []string
+	}{
+		"a list of paths":       {[]any{"bin/x", "bin/y"}, []string{"bin/x", "bin/y"}},
+		"a platform map":        {map[string]any{osn: []any{"bin/x"}, "other": []any{"bin/y"}}, []string{"bin/x"}},
+		"a platform we are not": {map[string]any{"other": []any{"bin/y"}}, nil},
+		// Neither a list nor a platform map. A scalar `provides: bin/x` is not
+		// the shape the pantry uses, and inventing a one-item list from it
+		// would accept a spelling nothing else in the fleet does.
+		"a scalar": {"just-a-string", nil},
+		"absent":   {nil, nil},
+		// A list with a non-string in it is refused WHOLE. Taking the strings
+		// and dropping the rest would hand the caller a shorter list that
+		// looks complete.
+		"a list with a number": {[]any{"bin/x", int64(3)}, nil},
+	} {
+		got := decodeProvides(c.in)
+		if len(got) != len(c.want) {
+			t.Errorf("%s: provides = %v, want %v", name, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("%s: provides = %v, want %v", name, got, c.want)
+				break
+			}
+		}
 	}
 }
 
-func TestDecodeProvidesPlatformMap(t *testing.T) {
-	osn, _ := HostSlug()
-	var n yaml.Node
-	_ = yaml.Unmarshal([]byte(osn+":\n  - bin/x\nother:\n  - bin/y\n"), &n)
-	got := decodeProvides(*n.Content[0]) // the mapping node
-	if len(got) != 1 || got[0] != "bin/x" {
-		t.Errorf("platform provides = %v", got)
+// A field that is present but the wrong shape is a DEFECT, and must be said
+// so. Reading `env: [not a map]` as "no env" would install a package whose
+// consumers silently lack the environment it declares they need.
+func TestMapFieldTellsAbsentFromMalformed(t *testing.T) {
+	doc := map[string]any{
+		"runtime": map[string]any{"env": map[string]any{"K": "v"}},
+		"broken":  []any{"not a map"},
+		"nulled":  nil,
+	}
+	if m, err := mapField(doc, "runtime", "env"); err != nil || m["K"] != "v" {
+		t.Errorf("a present mapping: %v, %v", m, err)
+	}
+	if m, err := mapField(doc, "absent"); err != nil || m != nil {
+		t.Errorf("an absent key is not an error: %v, %v", m, err)
+	}
+	if m, err := mapField(doc, "nulled"); err != nil || m != nil {
+		t.Errorf("an explicit null is absent, not malformed: %v, %v", m, err)
+	}
+	if _, err := mapField(doc, "broken"); err == nil {
+		t.Error("a list where a mapping belongs must be an error")
+	}
+	// And the message names the PATH it failed at, not just the leaf: "env"
+	// alone does not say which of a recipe's blocks is wrong.
+	if _, err := mapField(map[string]any{"runtime": map[string]any{"env": []any{1}}}, "runtime", "env"); err == nil {
+		t.Error("want an error")
+	} else if !strings.Contains(err.Error(), "runtime.env") {
+		t.Errorf("the message must name the path: %v", err)
+	}
+}
+
+// constraintText renders a constraint the way the resolver reads it, and an
+// author may write one that looks like a number.
+func TestConstraintText(t *testing.T) {
+	for name, c := range map[string]struct{ in, want any }{
+		"text":                  {"^3", "^3"},
+		"an integer constraint": {int64(1), "1"},
+		"a fractional one":      {1.5, "1.5"},
+		"absent":                {nil, ""},
+		// Not a scalar: "" reaches the resolver as "any version", which is what
+		// the decode this replaces produced too.
+		"a mapping": {map[string]any{"a": 1}, ""},
+		"a list":    {[]any{1}, ""},
+	} {
+		if got := constraintText(c.in); got != c.want {
+			t.Errorf("%s: constraintText = %q, want %q", name, got, c.want)
+		}
 	}
 }
 
@@ -1508,5 +1568,50 @@ func TestHTTPStatusErrorKeepsItsWording(t *testing.T) {
 	}
 	if isNotFound(&httpStatusError{url: "u", status: 503}) || isNotFound(errors.New("boom")) {
 		t.Error("isNotFound must not claim anything else")
+	}
+}
+
+// A dependency declared BOTH at the top level and in a platform block used to
+// be decided by Go's map iteration order. qt.io asks for unicode.org ^71 at
+// the top and ~71 under linux:, and the client answered ~71 four times in five
+// — a different closure, from the same recipe, on the same machine.
+//
+// The more specific declaration wins, and the two that both match a linux
+// host, `linux:` and `linux/x86-64:`, are applied in that order. Run enough
+// times that a coin toss would show: a single call cannot tell a fixed choice
+// from a lucky one.
+func TestReduceDepsPlatformBlockWinsDeterministically(t *testing.T) {
+	m := map[string]any{
+		"unicode.org": "^71",
+		"zlib.net":    "^1",
+		"linux": map[string]any{
+			"unicode.org": "~71",
+			"only.linux":  "*",
+		},
+		"linux/x86-64": map[string]any{"unicode.org": "=71.1"},
+		"darwin":       map[string]any{"unicode.org": "^99", "only.darwin": "*"},
+	}
+	for i := 0; i < 200; i++ {
+		got := reduceDeps(m, "linux", "x86-64")
+		if got["unicode.org"] != "=71.1" {
+			t.Fatalf("run %d: unicode.org = %q, want the arch block's =71.1", i, got["unicode.org"])
+		}
+		if got["zlib.net"] != "^1" || got["only.linux"] != "*" {
+			t.Fatalf("run %d: %v", i, got)
+		}
+		if _, leaked := got["only.darwin"]; leaked {
+			t.Fatalf("run %d: a darwin-only dependency reached a linux closure", i)
+		}
+	}
+	// Without the arch block, the os block still beats the top level.
+	delete(m, "linux/x86-64")
+	for i := 0; i < 200; i++ {
+		if got := reduceDeps(m, "linux", "x86-64"); got["unicode.org"] != "~71" {
+			t.Fatalf("run %d: unicode.org = %q, want the linux block's ~71", i, got["unicode.org"])
+		}
+	}
+	// A platform block that is not a mapping is skipped, not merged.
+	if got := reduceDeps(map[string]any{"linux": "nonsense", "a": "1"}, "linux", "x86-64"); len(got) != 1 || got["a"] != "1" {
+		t.Errorf("a malformed platform block must be skipped: %v", got)
 	}
 }
