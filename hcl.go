@@ -52,13 +52,11 @@ func hclBodyToMap(body *hclsyntax.Body) (map[string]any, error) {
 		}
 		g, err := hclCtyToGo(v)
 		if err != nil {
-			// Not reachable from HCL text: with no evaluation context every
-			// value an attribute can hold is one hclCtyToGo renders, and a
-			// reference that is not fails above as a diagnostic instead. It
-			// stays because the two functions can drift — a future cty type
-			// would arrive here first — and because the alternative was a test
-			// that exercised a COPY of these three lines, which would have
-			// agreed with itself whatever they said.
+			// Not reachable from HCL TEXT — with no evaluation context, every
+			// value an attribute can hold is one hclCtyToGo renders — but
+			// reachable from a body, which is how the test gets here. It
+			// matters because the two functions can drift: a future cty type
+			// would arrive here first.
 			return nil, fmt.Errorf("hcl: %s: %w", name, err)
 		}
 		out[name] = g
