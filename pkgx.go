@@ -17,7 +17,6 @@ import (
 	"sync"
 	"time"
 
-	yaml "gopkg.in/yaml.v3"
 	"oras.land/oras-go/v2/errdef"
 	"oras.land/oras-go/v2/registry/remote/errcode"
 )
@@ -162,9 +161,21 @@ func applyEnv(get func(string) string) {
 	}
 }
 
-// fetchRecipe returns a project's recipe as YAML bytes, trying PantryOverlay
+// fetchRecipe returns a project's recipe as HCL bytes, trying PantryOverlay
 // first (when set) and falling back to PantryBase when the overlay lacks that
-// project. A package.hcl is converted, so callers see one format.
+// project.
+//
+// HCL is the format this client speaks. Our own overlay is written in it, and
+// an upstream package.yml is converted HERE, on the way in — so this function
+// is the last place in the tree that knows two formats exist. Nothing is
+// written to disk and upstream is not forked; the conversion is a step in a
+// fetch.
+//
+// It used to run the other way, converting HCL to YAML so the readers below
+// could keep their yaml.Node fields. That put a YAML emitter on the path of
+// every recipe, and yaml.v3 can emit a block scalar it cannot re-read —
+// priver.dev/geni is the one that does. Going this direction, nothing on the
+// recipe path emits YAML at all.
 func fetchRecipe(project string) ([]byte, error) {
 	for _, base := range []string{PantryOverlay, PantryBase} {
 		if base == "" {
@@ -176,13 +187,31 @@ func fetchRecipe(project string) ([]byte, error) {
 		// falls through to upstream, and the recipe that builds is the one the
 		// overlay exists to replace. Nothing fails; the wrong thing is built.
 		if body, err := httpGet(fmt.Sprintf("%s/%s/package.hcl", base, project)); err == nil {
-			return HCLToYAML(body, project+"/package.hcl")
+			return body, nil
 		}
 		if body, err := httpGet(fmt.Sprintf("%s/%s/package.yml", base, project)); err == nil {
-			return body, nil
+			return YAMLToHCL(body, project+"/package.yml")
 		}
 	}
 	return nil, fmt.Errorf("no recipe for %s in %s or %s", project, PantryOverlay, PantryBase)
+}
+
+// recipeDoc fetches a recipe and reads it as a document.
+//
+// One place parses, so the three readers below differ only in what they look
+// for. Each of them used to unmarshal the bytes into a struct of its own with
+// its own error wording, and two of those said "package.yml" about a recipe
+// that may well be HCL.
+func recipeDoc(project string) (map[string]any, error) {
+	body, err := fetchRecipe(project)
+	if err != nil {
+		return nil, err
+	}
+	doc, err := HCLToMap(body, project+"/package.hcl")
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", project, err)
+	}
+	return doc, nil
 }
 
 // Dir resolves the bottle store (PKGX_DIR, default ~/.pkgx).
@@ -923,35 +952,69 @@ func DownloadBottle(project, ver, osn, arch string) ([]byte, string, error) {
 	return nil, "", fmt.Errorf("no bottle for %s v%s (%s/%s)", project, ver, osn, arch)
 }
 
-// --- package.yml (dependencies + provides) ----------------------------------
-
-type pkgYML struct {
-	Dependencies map[string]yaml.Node `yaml:"dependencies"`
-	Companions   map[string]yaml.Node `yaml:"companions"`
-	Provides     yaml.Node            `yaml:"provides"`
-}
+// --- a recipe's dependencies and provides -----------------------------------
 
 // reduceDeps flattens a platform-keyed dependency map (`linux: {...}`,
 // `darwin/aarch64: {...}`) onto one os/arch, the shape both `dependencies` and
 // `companions` use.
-func reduceDeps(m map[string]yaml.Node, osn, arch string) map[string]string {
+// The platform block WINS, and it wins in a fixed order.
+//
+// A recipe may name the same dependency twice — qt.io asks for unicode.org
+// `^71` at the top level and `~71` under `linux:`. Merging both in one pass
+// over a Go map let iteration order decide, so the client answered `~71` four
+// times in five and `^71` the other time: a different closure, from the same
+// recipe, on the same machine. Sampled 25 runs per arm; the nondeterminism
+// predates HCL and this only changes its bias.
+//
+// Exactly one recipe in the upstream pantry is affected on linux and one on
+// darwin, where both constraints happen to be `^2` and the coin toss cannot be
+// seen. Rare is not the same as harmless: it is one build in five of the
+// largest package in the pantry.
+func reduceDeps(m map[string]any, osn, arch string) map[string]string {
 	out := map[string]string{}
-	for k, node := range m {
-		if isPlatformKey(k) {
-			if platformMatches(k, osn, arch) {
-				var sub map[string]string
-				_ = node.Decode(&sub)
-				for pk, pv := range sub {
-					out[pk] = pv
-				}
-			}
+	for k, v := range m {
+		if !isPlatformKey(k) {
+			out[k] = constraintText(v)
+		}
+	}
+	// `linux:` then `linux/x86-64:`, never the reverse: both match this host,
+	// and the one that names the ARCH is the more specific of the two. Left to
+	// map order that pair would race exactly as the one above did.
+	for _, key := range []string{osn, osn + "/" + arch} {
+		sub, ok := m[key].(map[string]any)
+		if !ok {
 			continue
 		}
-		var s string
-		_ = node.Decode(&s)
-		out[k] = s
+		for pk, pv := range sub {
+			out[pk] = constraintText(pv)
+		}
 	}
 	return out
+}
+
+// constraintText renders a version constraint the way the resolver reads it.
+//
+// A constraint is text — `^3`, `>=1.2<2` — but YAML lets an author write one
+// that looks like a number, and `zlib.net: 1` decodes to an integer. Rendering
+// it is what the yaml.Node this replaces did too: it decoded the node into a
+// string, which for a scalar is the scalar's text.
+//
+// A value that is not a scalar yields "", which is also what came before: a
+// mapping decoded into a string field failed, the error was dropped, and the
+// empty string stayed. "" means "any version" to the resolver, so a recipe
+// with a malformed constraint is installed rather than refused — worth
+// knowing, and not a thing to change while the requirement is compatibility.
+func constraintText(v any) string {
+	switch x := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return x
+	case map[string]any, []any:
+		return ""
+	default:
+		return fmt.Sprint(x)
+	}
 }
 
 // CompanionsFor returns a recipe's `companions:` for an explicit os/arch slug.
@@ -968,15 +1031,39 @@ func reduceDeps(m map[string]yaml.Node, osn, arch string) map[string]string {
 // pantry recipes declare the key, and 21 of those are named as a dependency by
 // some other recipe.
 func CompanionsFor(project, osn, arch string) (map[string]string, error) {
-	body, err := fetchRecipe(project)
+	doc, err := recipeDoc(project)
 	if err != nil {
 		return nil, err
 	}
-	var y pkgYML
-	if err := yaml.Unmarshal(body, &y); err != nil {
-		return nil, fmt.Errorf("%s/package.yml: %w", project, err)
+	comp, err := mapField(doc, "companions")
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", project, err)
 	}
-	return reduceDeps(y.Companions, osn, arch), nil
+	return reduceDeps(comp, osn, arch), nil
+}
+
+// mapField reads a mapping under key, distinguishing ABSENT from MALFORMED.
+//
+// A recipe that declares no `companions:` is the common case and not an error.
+// One that declares `env: [this is not a map]` is a defect, and must be said
+// so: the decode this replaces failed on it, and reading it as "no env" would
+// install a package whose consumers silently lack the environment it says they
+// need — help2man without PERL5LIB, which is how gnu.org/libidn2 failed to
+// build in the first place.
+func mapField(doc map[string]any, path ...string) (map[string]any, error) {
+	cur := doc
+	for i, key := range path {
+		v, present := cur[key]
+		if !present || v == nil {
+			return nil, nil
+		}
+		m, ok := v.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%s: want a mapping, got %T", strings.Join(path[:i+1], "."), v)
+		}
+		cur = m
+	}
+	return cur, nil
 }
 
 // FetchMeta returns the host-relevant runtime dependencies (project ->
@@ -992,17 +1079,15 @@ func FetchMeta(project string) (deps map[string]string, provides []string, err e
 // platform silently produces the WRONG closure — a linux image missing the deps
 // only linux declares, and carrying the ones only darwin needs.
 func FetchMetaFor(project, osn, arch string) (deps map[string]string, provides []string, err error) {
-	body, err := fetchRecipe(project)
+	doc, err := recipeDoc(project)
 	if err != nil {
 		return nil, nil, err
 	}
-	var y pkgYML
-	if err := yaml.Unmarshal(body, &y); err != nil {
-		return nil, nil, fmt.Errorf("%s/package.yml: %w", project, err)
+	d, err := mapField(doc, "dependencies")
+	if err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", project, err)
 	}
-	deps = reduceDeps(y.Dependencies, osn, arch)
-	provides = decodeProvides(y.Provides)
-	return deps, provides, nil
+	return reduceDeps(d, osn, arch), decodeProvides(doc["provides"]), nil
 }
 
 // platformKeys are the OS names a recipe may use to scope a dependency block.
@@ -1035,18 +1120,39 @@ func platformMatches(k, osn, arch string) bool {
 	return k == osn+"/"+arch
 }
 
-func decodeProvides(n yaml.Node) []string {
-	var list []string
-	if err := n.Decode(&list); err == nil {
+func decodeProvides(v any) []string {
+	if list, ok := stringList(v); ok {
 		return list
 	}
 	// may be a platform map: {linux: [...], darwin: [...]}
-	var m map[string][]string
-	if err := n.Decode(&m); err == nil {
+	if m, ok := v.(map[string]any); ok {
 		osn, _ := HostSlug()
-		return m[osn]
+		list, _ := stringList(m[osn])
+		return list
 	}
 	return nil
+}
+
+// stringList reads a list of strings, and refuses one that is not.
+//
+// Refusing the whole list rather than the element is deliberate, and it is
+// what the yaml.Node decode this replaces did: a `provides:` holding anything
+// but strings failed to decode and yielded nothing. Taking the strings and
+// dropping the rest would hand the caller a SHORTER list that looks complete.
+func stringList(v any) ([]string, bool) {
+	items, ok := v.([]any)
+	if !ok {
+		return nil, false
+	}
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		s, ok := it.(string)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, s)
+	}
+	return out, true
 }
 
 // --- resolution -------------------------------------------------------------
@@ -1624,10 +1730,10 @@ func writeABILinks(pkgxDir string, r Resolved, osn, arch string) {
 	}
 }
 
-// --- package.yml (runtime env) ----------------------------------------------
+// --- a recipe's runtime env -------------------------------------------------
 
-// runtimeYML models the `runtime: env:` block a package uses to declare the
-// environment IT needs its consumers to have. It is not decoration: help2man
+// The `runtime: env:` block is how a package declares the environment IT needs
+// its consumers to have. It is not decoration: help2man
 // bundles the perl module Locale::gettext into its own prefix and publishes
 // PERL5LIB so the module is findable, and without that export help2man dies
 // with "Can't locate Locale/gettext.pm in @INC" — which is how gnu.org/libidn2
@@ -1644,12 +1750,8 @@ func writeABILinks(pkgxDir string, r Resolved, osn, arch string) {
 //
 // Read as map[string]string that is `line 15: cannot unmarshal !!map into
 // string`, and the WHOLE runtime env is then lost — not just the linux half.
-// A value may also be a list, which the pantry joins with spaces.
-type runtimeYML struct {
-	Runtime struct {
-		Env map[string]any `yaml:"env"`
-	} `yaml:"runtime"`
-}
+// A value may also be a list, which the pantry joins with spaces. So it is
+// read as a document and flattened below, never decoded into a typed table.
 
 // FetchRuntimeEnv returns a project's runtime env declarations with the recipe
 // placeholders resolved against the version actually installed. A project that
@@ -1701,17 +1803,17 @@ func depTokens(closure []Resolved, dir string) map[string]string {
 }
 
 func fetchRuntimeEnv(project, prefix, version string, deps map[string]string) (map[string]string, error) {
-	body, err := fetchRecipe(project)
+	doc, err := recipeDoc(project)
 	if err != nil {
 		return nil, err
 	}
-	var y runtimeYML
-	if err := yaml.Unmarshal(body, &y); err != nil {
-		return nil, fmt.Errorf("%s/package.yml: %w", project, err)
+	env, err := mapField(doc, "runtime", "env")
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", project, err)
 	}
-	out := make(map[string]string, len(y.Runtime.Env))
+	out := make(map[string]string, len(env))
 	osn, arch := HostSlug()
-	flattenEnv(y.Runtime.Env, out, osn, arch, prefix, version, deps)
+	flattenEnv(env, out, osn, arch, prefix, version, deps)
 	return out, nil
 }
 
