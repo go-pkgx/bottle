@@ -33,12 +33,24 @@ var (
 	DistBase   = "oci://ghcr.io/go-pkgx/packages"
 	PantryBase = "https://raw.githubusercontent.com/pkgxdev/pantry/main/projects"
 
-	// PantryOverlay is consulted for a project's package.yml BEFORE PantryBase,
-	// falling back to PantryBase when the overlay has no recipe for that
-	// project. A small curated overlay can then carry corrected recipes (e.g. a
-	// stale `openssl.org: ^1.1` bumped to a constraint that matches the
-	// published bottles) without forking the whole pantry — everything it does
-	// not override still resolves upstream.
+	// PantryOverlay is MERGED OVER PantryBase for a project's package.yml: a
+	// key the overlay states replaces that key, a key it omits is inherited
+	// from upstream, and a list replaces rather than merges. A small curated
+	// overlay can then carry corrected recipes (e.g. a stale
+	// `openssl.org: ^1.1` bumped to a constraint that matches the published
+	// bottles) without forking the whole pantry.
+	//
+	// This said "consulted BEFORE PantryBase, falling back when the overlay
+	// has no recipe" until #103, and that description outlived the code by
+	// long enough to matter. Preferring the overlay WHOLE was right while every
+	// entry was a full copy of an upstream recipe; go-pkgx/pantry-overlay#50
+	// then reduced all 183 to the keys they change, so an entry read whole is a
+	// FRAGMENT — under the old rule curl.se would resolve to `dependencies` and
+	// nothing else, with no distributable and no build. bk read one that way
+	// and its closure collapsed from 54 projects to 8 (go-pkgx/bk#232).
+	//
+	// A comment that describes a superseded rule is worse than none, because it
+	// is believed: this is the second one found today.
 	//
 	// It defaults to OUR overlay because DistBase defaults to OUR registry, and
 	// the two have to agree. They did not, and the disagreement was silent:
