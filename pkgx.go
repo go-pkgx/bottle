@@ -177,23 +177,79 @@ func applyEnv(get func(string) string) {
 // priver.dev/geni is the one that does. Going this direction, nothing on the
 // recipe path emits YAML at all.
 func fetchRecipe(project string) ([]byte, error) {
-	for _, base := range []string{PantryOverlay, PantryBase} {
-		if base == "" {
-			continue
-		}
-		// HCL first, and only then YAML. Our own overlay is written in HCL;
-		// upstream's pantry is YAML. Asking for the yaml alone is how an
-		// override silently stops applying — the overlay 404s, resolution
-		// falls through to upstream, and the recipe that builds is the one the
-		// overlay exists to replace. Nothing fails; the wrong thing is built.
-		if body, err := httpGet(fmt.Sprintf("%s/%s/package.hcl", base, project)); err == nil {
-			return body, nil
-		}
-		if body, err := httpGet(fmt.Sprintf("%s/%s/package.yml", base, project)); err == nil {
-			return YAMLToHCL(body, project+"/package.yml")
+	doc, err := recipeDoc(project)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(EmitHCL(doc)), nil
+}
+
+// fetchSide reads ONE pantry's copy of a recipe, reporting separately whether
+// it is there and whether asking failed.
+//
+// The two are not the same answer and conflating them is how an override stops
+// applying in silence: a 404 means this pantry does not carry the project, and
+// anything else means we do not know. Reading "not found" out of a timeout
+// would resolve the recipe the overlay exists to replace, and nothing would
+// say so — the same shape the comment on `repoAbsent` warns about, that
+// classifying a transport failure by the words in its message turns a
+// transient error into a different, silent answer.
+func fetchSide(base, project string) (map[string]any, bool, error) {
+	if base == "" {
+		return nil, false, nil
+	}
+	// HCL first, and only then YAML. Our own overlay is written in HCL;
+	// upstream's pantry is YAML.
+	for _, name := range []string{"package.hcl", "package.yml"} {
+		body, err := httpGet(fmt.Sprintf("%s/%s/%s", base, project, name))
+		switch {
+		case err == nil:
+			src := body
+			if name == "package.yml" {
+				if src, err = YAMLToHCL(body, project+"/package.yml"); err != nil {
+					return nil, false, err
+				}
+			}
+			doc, err := HCLToMap(src, project+"/"+name)
+			return doc, err == nil, err
+		case !isNotFound(err):
+			return nil, false, err
 		}
 	}
-	return nil, fmt.Errorf("no recipe for %s in %s or %s", project, PantryOverlay, PantryBase)
+	return nil, false, nil
+}
+
+// mergeRecipe deep-merges the overlay's document over the pantry's.
+//
+// A key the overlay states replaces that key; a key it does not mention is
+// INHERITED. That is what makes an overlay an overlay rather than a fork: an
+// entry can say only the two lines it changes, and everything else follows
+// upstream instead of drifting from a copy taken once.
+//
+// LISTS ARE REPLACED, not merged — the same rule the build-side overrides
+// follow (go-pkgx/bk's `logical` package). Kustomize merges some lists by a
+// "merge key" and replaces others and needs OpenAPI metadata to know which;
+// there is no merge key for the lines of a shell script.
+//
+// Omission stopping to mean removal is the one semantic change, and it was
+// measured before it was made: of the 175 overlay projects upstream also
+// carries, 8 omit a key the built recipe has, all of them under `build` and
+// `test`, and NONE under a key a consumer reads.
+func mergeRecipe(base, over map[string]any) map[string]any {
+	out := make(map[string]any, len(base)+len(over))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range over {
+		if om, ok := v.(map[string]any); ok {
+			if bm, ok2 := out[k].(map[string]any); ok2 {
+				out[k] = mergeRecipe(bm, om)
+				continue
+			}
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // recipeDoc fetches a recipe and reads it as a document.
@@ -203,15 +259,26 @@ func fetchRecipe(project string) ([]byte, error) {
 // its own error wording, and two of those said "package.yml" about a recipe
 // that may well be HCL.
 func recipeDoc(project string) (map[string]any, error) {
-	body, err := fetchRecipe(project)
-	if err != nil {
-		return nil, err
-	}
-	doc, err := HCLToMap(body, project+"/package.hcl")
+	base, hasBase, err := fetchSide(PantryBase, project)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", project, err)
 	}
-	return doc, nil
+	over, hasOver, err := fetchSide(PantryOverlay, project)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", project, err)
+	}
+	switch {
+	case hasBase && hasOver:
+		return mergeRecipe(base, over), nil
+	case hasOver:
+		// Upstream does not carry this project at all, so the overlay's copy
+		// is the whole recipe — for a consumer here and for the builder, which
+		// reads it the same way (go-pkgx/bk#231).
+		return over, nil
+	case hasBase:
+		return base, nil
+	}
+	return nil, fmt.Errorf("no recipe for %s in %s or %s", project, PantryOverlay, PantryBase)
 }
 
 // Dir resolves the bottle store (PKGX_DIR, default ~/.pkgx).

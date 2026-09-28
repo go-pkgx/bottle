@@ -39,11 +39,21 @@ func crossPantry(t *testing.T, recipes map[string]string, versions map[string][]
 		}
 		http.NotFound(w, r)
 	}))
-	oldPantry, oldUp := PantryBase, UpstreamDist
-	PantryBase, UpstreamDist = srv.URL, srv.URL
+	// PantryOverlay too, and it is not decoration. It defaults to the LIVE
+	// go-pkgx/pantry-overlay, so a test that pinned only PantryBase was
+	// reaching the network on every recipe it read — and passing because the
+	// real host answers 404 for an invented project. On wasm, where DNS fails
+	// with a connection reset rather than a 404, the same tests failed the
+	// moment resolution stopped treating a transport failure as an absence.
+	//
+	// The comment on the helper in pkgx_test.go already said it: a test must
+	// not depend on another repository's contents, nor on the network being
+	// there. This one simply did not do it.
+	oldPantry, oldUp, oldOver := PantryBase, UpstreamDist, PantryOverlay
+	PantryBase, UpstreamDist, PantryOverlay = srv.URL, srv.URL, ""
 	withDist(t, srv.URL)
 	return func() {
-		PantryBase, UpstreamDist = oldPantry, oldUp
+		PantryBase, UpstreamDist, PantryOverlay = oldPantry, oldUp, oldOver
 		srv.Close()
 	}
 }

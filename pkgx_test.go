@@ -1655,3 +1655,174 @@ func TestVersionsForSourcedExplainsBothFallbacks(t *testing.T) {
 		t.Errorf("the error must say both places were looked, got: %v", err)
 	}
 }
+
+// The overlay MERGES over upstream rather than replacing it, so an entry can
+// say only the lines it changes instead of forking the whole recipe.
+func TestRecipeDocMergesTheOverlayOverThePantry(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/acme.org/package.yml") {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, "dependencies:\n  openssl.org: ^1.1\n  zlib.net: ^1\nprovides:\n  - bin/acme\nbuild:\n  script: make\n")
+	}))
+	defer up.Close()
+	ov := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/acme.org/package.hcl") {
+			http.NotFound(w, r)
+			return
+		}
+		// Only what it changes.
+		_, _ = io.WriteString(w, "dependencies = { \"openssl.org\" = \"^3\" }\n")
+	}))
+	defer ov.Close()
+
+	oldBase, oldOver := PantryBase, PantryOverlay
+	t.Cleanup(func() { PantryBase, PantryOverlay = oldBase, oldOver })
+	PantryBase, PantryOverlay = up.URL, ov.URL
+
+	doc, err := recipeDoc("acme.org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps, _ := doc["dependencies"].(map[string]any)
+	// The overlay's key wins…
+	if deps["openssl.org"] != "^3" {
+		t.Errorf("openssl = %v", deps["openssl.org"])
+	}
+	// …and the one it does not mention is INHERITED rather than lost. That is
+	// the whole difference between an overlay and a fork.
+	if deps["zlib.net"] != "^1" {
+		t.Errorf("zlib was dropped: %v", deps)
+	}
+	if _, ok := doc["build"]; !ok {
+		t.Error("a sibling block the overlay does not mention was dropped")
+	}
+}
+
+// Only one side has it, and neither does.
+func TestRecipeDocWithOneSideOrNeither(t *testing.T) {
+	only := func(which string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !strings.Contains(r.URL.Path, which) || !strings.HasSuffix(r.URL.Path, "package.yml") {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = io.WriteString(w, "provides:\n  - bin/"+which+"\n")
+		}))
+	}
+	up, ov := only("fromup"), only("fromov")
+	defer up.Close()
+	defer ov.Close()
+	oldBase, oldOver := PantryBase, PantryOverlay
+	t.Cleanup(func() { PantryBase, PantryOverlay = oldBase, oldOver })
+	PantryBase, PantryOverlay = up.URL, ov.URL
+
+	// Upstream alone.
+	if d, err := recipeDoc("fromup"); err != nil || fmt.Sprint(d["provides"]) != "[bin/fromup]" {
+		t.Errorf("%v %v", d, err)
+	}
+	// Ours alone — upstream carries no such project, so the overlay is the
+	// whole recipe.
+	if d, err := recipeDoc("fromov"); err != nil || fmt.Sprint(d["provides"]) != "[bin/fromov]" {
+		t.Errorf("%v %v", d, err)
+	}
+	// Neither.
+	if _, err := recipeDoc("nowhere"); err == nil {
+		t.Error("a project in neither pantry must be an error")
+	}
+}
+
+// A 404 means "this pantry does not carry it". ANYTHING ELSE means we do not
+// know, and reading it as "not carried" is how an override stops applying in
+// silence: resolution would fall through and hand back the recipe the overlay
+// exists to correct, with nothing to show for it.
+func TestRecipeDocDoesNotReadAFailureAsAbsence(t *testing.T) {
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "package.yml") {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, "provides:\n  - bin/acme\n")
+	}))
+	defer good.Close()
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer broken.Close()
+
+	oldBase, oldOver, oldSleep := PantryBase, PantryOverlay, sleep
+	t.Cleanup(func() { PantryBase, PantryOverlay, sleep = oldBase, oldOver, oldSleep })
+	sleep = func(time.Duration) {}
+
+	// The OVERLAY is unreachable: do not quietly resolve upstream's recipe.
+	PantryBase, PantryOverlay = good.URL, broken.URL
+	if _, err := recipeDoc("acme.org"); err == nil {
+		t.Error("an unreachable overlay must fail, not fall through to upstream")
+	}
+	// Upstream is unreachable: do not quietly resolve a delta on its own,
+	// which would be an incomplete recipe.
+	PantryBase, PantryOverlay = broken.URL, good.URL
+	if _, err := recipeDoc("acme.org"); err == nil {
+		t.Error("an unreachable pantry must fail, not hand back the overlay alone")
+	}
+}
+
+// A recipe that does not parse is reported, on either side.
+func TestFetchSideOnSomethingUnreadable(t *testing.T) {
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "package.hcl") {
+			_, _ = io.WriteString(w, "distributable {")
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer bad.Close()
+	if _, ok, err := fetchSide(bad.URL, "acme.org"); err == nil || ok {
+		t.Errorf("ok=%v err=%v", ok, err)
+	}
+	badYAML := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "package.yml") {
+			_, _ = io.WriteString(w, "a: [\n")
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer badYAML.Close()
+	if _, ok, err := fetchSide(badYAML.URL, "acme.org"); err == nil || ok {
+		t.Errorf("ok=%v err=%v", ok, err)
+	}
+	// No base configured is not an error, it is "nothing here".
+	if _, ok, err := fetchSide("", "acme.org"); err != nil || ok {
+		t.Errorf("ok=%v err=%v", ok, err)
+	}
+}
+
+// mergeRecipe: a nested block merges, a list REPLACES, and a scalar under a
+// block does not become a mapping.
+func TestMergeRecipe(t *testing.T) {
+	base := map[string]any{
+		"build": map[string]any{"script": []any{"make", "make install"}, "env": map[string]any{"A": "1"}},
+		"keep":  "me",
+	}
+	over := map[string]any{
+		"build": map[string]any{"script": []any{"gmake"}, "env": map[string]any{"B": "2"}},
+	}
+	got := mergeRecipe(base, over)
+	b := got["build"].(map[string]any)
+	if fmt.Sprint(b["script"]) != "[gmake]" {
+		t.Errorf("a list must be replaced, got %v", b["script"])
+	}
+	env := b["env"].(map[string]any)
+	if env["A"] != "1" || env["B"] != "2" {
+		t.Errorf("a nested block must merge, got %v", env)
+	}
+	if got["keep"] != "me" {
+		t.Error("a key the overlay does not mention must be inherited")
+	}
+	// A mapping over a scalar replaces it rather than merging into nothing.
+	got2 := mergeRecipe(map[string]any{"a": "scalar"}, map[string]any{"a": map[string]any{"b": 1}})
+	if _, ok := got2["a"].(map[string]any); !ok {
+		t.Errorf("got %v", got2)
+	}
+}
