@@ -10,8 +10,10 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -506,5 +508,57 @@ func TestExtractStillNestsThroughRealDirectories(t *testing.T) {
 	got, err := os.ReadFile(filepath.Join(dest, "a", "b", "c", "d.txt"))
 	if err != nil || string(got) != "deep" {
 		t.Fatalf("nested file: %q, %v", got, err)
+	}
+}
+
+// TestExtractDropsSetuidAndSetgid pins a guarantee that was accidental.
+//
+// extPermOr returns m.Perm(), which is the low nine bits, so the setuid,
+// setgid and sticky bits a tar header can carry never reach the filesystem.
+// Nothing said so and nothing checked it, and "returns the permission bits"
+// is one refactor away from "returns the mode" — in an extractor that bk
+// points at upstream source tarballs and that the sovereign lane runs as
+// root inside a chroot.
+//
+// Verified by mutation, surgically — a broader one (`return m`) is caught by
+// TestExtractHappyPath for an unrelated reason and would prove nothing. Adding
+// just the three bits back,
+//
+//	m.Perm() | (m & (fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky))
+//
+// fails THIS test and leaves every other test in the package green. That is
+// the whole argument for it existing.
+//
+// What a given lane actually witnesses differs. On macOS as an unprivileged
+// user the kernel refuses setuid/setgid on a file that user writes, so only
+// the sticky bit demonstrates the mutation here; a lane running as root sees
+// all three. The assertion covers all three either way, because the place
+// this matters is the sovereign build, which runs as root in a chroot and is
+// exactly where the kernel would NOT be a second line of defence.
+func TestExtractDropsSetuidAndSetgid(t *testing.T) {
+	skipOnWASI(t, wasiNoChmod)
+	if runtime.GOOS == "windows" {
+		t.Skip("windows has no setuid bit to drop")
+	}
+	dest := t.TempDir()
+	// tar carries these in the header's mode; archive/tar maps them onto
+	// fs.ModeSetuid and friends in FileInfo().Mode(), which is what Extract
+	// reads.
+	const dangerous = 0o4000 | 0o2000 | 0o1000 | 0o755
+	data := buildExtractTar(t, []tarEntry{
+		{name: "s", typ: tar.TypeReg, mode: dangerous, body: "x"},
+		{name: "d", typ: tar.TypeDir, mode: dangerous},
+	})
+	if err := extract(data, dest, 0); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	for _, name := range []string{"s", "d"} {
+		fi, err := os.Stat(filepath.Join(dest, name))
+		if err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+		if bad := fi.Mode() & (fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky); bad != 0 {
+			t.Errorf("%s kept %v from the archive (mode %v)", name, bad, fi.Mode())
+		}
 	}
 }

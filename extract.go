@@ -56,8 +56,19 @@ var (
 //     time is left as written.
 //   - Absolute names, and names that escape dest after stripping, are rejected
 //     with ErrInsecurePath; a hard-link source is vetted the same way.
+//   - An entry whose path crosses a symlink an EARLIER entry created is
+//     rejected with ErrInsecurePath. A name check is lexical and a write is
+//     not: `dest/a/b` is inside dest even when `a` is a link out of it.
+//   - setuid, setgid and sticky are dropped: an entry gets its permission bits
+//     and nothing else.
 //   - Directories, regular files, symlinks and hard links are reproduced;
 //     unsupported entry types (fifos, devices, ...) are skipped.
+//
+// What it does NOT promise: a symlink ENTRY may point anywhere, including out
+// of dest, which is what tar(1) does and what a bottle's relative links need.
+// Nothing Extract writes afterwards follows such a link — that is the
+// ErrInsecurePath rule above — but a caller that walks the result and resolves
+// symlinks itself can still leave dest, and must say whether it means to.
 //
 // tar.ErrInsecurePath from tr.Next is tolerated because Extract performs its own
 // stricter vetting on every entry name.
