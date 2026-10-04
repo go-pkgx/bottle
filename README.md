@@ -33,8 +33,8 @@ so both tools share one source of truth for the bottle protocol.
 
 `Extract` is the one tar extractor in this ecosystem, and it is pointed at
 archives nobody here produced: bottles from a registry, and — through
-`bk/fetch` — **source tarballs from ~200 upstream sites**, unpacked as root
-inside a chroot in the sovereign build. So what it refuses is part of its API,
+`bk/fetch` — **source tarballs from 233 distinct upstream hosts**, unpacked as
+root inside a chroot in the sovereign build. So what it refuses is part of its API,
 not an implementation detail.
 
 | it rejects with `ErrInsecurePath` | why |
