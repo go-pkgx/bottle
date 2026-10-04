@@ -353,9 +353,37 @@ func SetupScratchRootfsAt(root, loaderName, loaderTarget, shellTarget string) er
 
 // LoaderNameFor answers LoaderName for an explicit architecture, so a builder
 // can name the loader of the image it is assembling.
+//
+// An architecture that is not here returns "", and the caller must say so
+// rather than report a missing glibc: the two look identical from the outside
+// and are nothing alike. `bk builder` on linux/s390x said
+//
+//	builder: no s390x loader in the staged glibc — is gnu.org/glibc in the
+//	toolchain?
+//
+// with gnu.org/glibc plainly in the toolchain and all 42 packages installed.
+//
+// s390x's loader is NOT named after its architecture, and that is the one
+// thing about this table that cannot be guessed. The two entries above both
+// read `ld-linux-<arch>.so.N`; extending that pattern gives
+// `ld-linux-s390x.so.1`, which does not exist. The real name comes from OUR
+// OWN artefacts, twice over and independently:
+//
+//   - 362 occurrences of `ld64.so.1 is NEEDED` across the s390x lane's logs,
+//     and not one `ld-linux-*.so` (recorded in go-pkgx/packages'
+//     overrides/gnu.org-glibc.hcl, which needed the same fact for $LDSO);
+//   - `readelf -l` on the published s390x libc.so.6 (go-pkgx/bk#263):
+//     `/…/gnu.org/glibc/v2.44+brewing/lib/glibc-2.44/ld64.so.1`.
+//
+// ppc64le, riscv64 and loong64 are deliberately ABSENT. bk is TESTED on them
+// and no bottle is BUILT for them, so there is no artefact here to read a name
+// out of — and a name deduced from a pattern is exactly what this comment
+// exists to warn against. Add one when a bottle for that architecture can be
+// read.
 func LoaderNameFor(arch string) string {
 	return map[string]string{
 		"aarch64": "ld-linux-aarch64.so.1",
 		"x86-64":  "ld-linux-x86-64.so.2",
+		"s390x":   "ld64.so.1",
 	}[arch]
 }
