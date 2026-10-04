@@ -367,6 +367,9 @@ func TestExtractRefusesALinkAboveTheStrippedRoot(t *testing.T) {
 // This is the classic tar symlink traversal, and the test writes the escape
 // it would perform: without the unlink, `outside` gains the body.
 func TestExtractDoesNotWriteThroughAnEarlierSymlink(t *testing.T) {
+	// The escape this guards against needs a symlink to exist, and WASI
+	// refuses to make one — so the traversal is not reachable there either.
+	skipOnWASI(t, wasiNoSymlink)
 	outDir := t.TempDir()
 	outside := filepath.Join(outDir, "outside")
 	if err := os.WriteFile(outside, []byte("untouched"), 0o644); err != nil {
@@ -410,6 +413,7 @@ func TestExtractDoesNotWriteThroughAnEarlierSymlink(t *testing.T) {
 // linux/x86-64 would not unpack at all, while the aarch64 bottle of the same
 // version did.
 func TestExtractReplacesALoopingSymlink(t *testing.T) {
+	skipOnWASI(t, wasiNoSymlink)
 	dest := t.TempDir()
 	data := buildExtractTar(t, []tarEntry{
 		{name: "n/loop", typ: tar.TypeSymlink, link: "loop"},
