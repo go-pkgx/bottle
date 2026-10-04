@@ -29,6 +29,39 @@ so both tools share one source of truth for the bottle protocol.
 - Embedded Mozilla CA bundle (`net/http` with no system trust store), pure-Go
   DNS.
 
+## What `Extract` refuses
+
+`Extract` is the one tar extractor in this ecosystem, and it is pointed at
+archives nobody here produced: bottles from a registry, and — through
+`bk/fetch` — **source tarballs from ~200 upstream sites**, unpacked as root
+inside a chroot in the sovereign build. So what it refuses is part of its API,
+not an implementation detail.
+
+| it rejects with `ErrInsecurePath` | why |
+| --- | --- |
+| an absolute entry name | `/etc/passwd` is not inside anything |
+| a name that escapes `dest` after component-stripping | the classic `../..` |
+| a hard-link **source** that escapes `dest` | vetted exactly like a name |
+| an entry whose path **crosses a symlink an earlier entry created** | a name check is lexical and a write is not: `dest/a/b` is inside `dest` even when `a` is a link out of it |
+
+and it drops **setuid, setgid and sticky** — an entry gets its permission bits
+and nothing else.
+
+A leaf that an earlier entry made a symlink is unlinked rather than refused,
+because the archive does say what belongs at that name. A *directory
+component* that is already a symlink is refused, because there the archive
+contradicts itself.
+
+**What it does not promise.** A symlink *entry* may point anywhere, including
+out of `dest` — that is what `tar(1)` does, and bottles need relative links.
+Nothing `Extract` writes afterwards follows such a link, but a caller that
+walks the result and resolves symlinks itself can still leave `dest`, and has
+to say whether it means to.
+
+Each of these rules has a test that fails without it, and a positive control
+that an ordinary nested archive still extracts: a check tightened too far
+refuses everything and reports green.
+
 ## Where it is proven to work
 
 This package reads formats it did not write — ELF and Mach-O headers, OCI
