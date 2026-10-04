@@ -107,6 +107,42 @@ func Extract(tr *tar.Reader, dest string, strip int) error {
 			if err := extMkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
+			// Unlink first, like the symlink and hardlink branches above
+			// already do, and for a reason they do not share.
+			//
+			// Writing to a path that is ALREADY a symlink writes through it.
+			// extSafeTarget keeps an entry's own NAME inside dest; it cannot
+			// see a link an EARLIER entry put there. So an archive holding
+			//
+			//	x -> /somewhere/else      (symlink entry)
+			//	x                         (regular entry)
+			//
+			// reaches outside the destination on the second entry, which is
+			// the classic tar symlink traversal. Nothing in this factory
+			// ships such an archive, and "our bottles are signed" is not the
+			// property an extractor should rely on — PKGX_VERIFY=0 is a
+			// supported mode for a loopback registry, and an extractor is
+			// exactly where defence in depth belongs.
+			//
+			// Found from the benign end: invisible-island.net/ncurses 6.6.0
+			// for linux/x86-64 and 6.6 for linux/s390x carry a terminfo entry
+			// whose symlink loops, and unpacking either died with
+			//
+			//	open …/share/terminfo/n/ncr260vt300wpp: too many levels of
+			//	symbolic links
+			//
+			// while the aarch64 bottle of the same version unpacked fine. A
+			// published bottle that cannot be unpacked is its own defect; it
+			// is also the only reason this line was ever looked at.
+			//
+			// A SYMLINK only. An existing regular file is handled by the
+			// O_TRUNC in extWriteFile, and an existing DIRECTORY must keep
+			// erroring — TestUntarErrorBranches asserts that, and a blanket
+			// Remove silently replaced an empty one with a file. The fix is
+			// the size of the defect.
+			if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+				_ = os.Remove(target)
+			}
 			if err := extWriteFile(target, extPermOr(mode, 0o644), tr); err != nil {
 				return err
 			}

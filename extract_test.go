@@ -359,3 +359,71 @@ func TestExtractRefusesALinkAboveTheStrippedRoot(t *testing.T) {
 		t.Errorf("error does not explain itself: %v", err)
 	}
 }
+
+// A regular entry whose path is ALREADY a symlink must replace the link, not
+// write through it. extSafeTarget keeps an entry's own name inside dest; it
+// cannot see a link an earlier entry put there.
+//
+// This is the classic tar symlink traversal, and the test writes the escape
+// it would perform: without the unlink, `outside` gains the body.
+func TestExtractDoesNotWriteThroughAnEarlierSymlink(t *testing.T) {
+	// The escape this guards against needs a symlink to exist, and WASI
+	// refuses to make one — so the traversal is not reachable there either.
+	skipOnWASI(t, wasiNoSymlink)
+	outDir := t.TempDir()
+	outside := filepath.Join(outDir, "outside")
+	if err := os.WriteFile(outside, []byte("untouched"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := t.TempDir()
+	data := buildExtractTar(t, []tarEntry{
+		{name: "x", typ: tar.TypeSymlink, link: outside},
+		{name: "x", typ: tar.TypeReg, mode: 0o644, body: "payload"},
+	})
+	if err := extract(data, dest, 0); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+
+	got, err := os.ReadFile(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "untouched" {
+		t.Errorf("the archive wrote OUTSIDE dest: %q", got)
+	}
+	// And the entry landed where it belongs, as a regular file.
+	fi, err := os.Lstat(filepath.Join(dest, "x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		t.Error("the symlink survived; the regular entry did not replace it")
+	}
+	b, err := os.ReadFile(filepath.Join(dest, "x"))
+	if err != nil || string(b) != "payload" {
+		t.Errorf("dest/x = %q, %v", b, err)
+	}
+}
+
+// The benign shape that found it: a symlink that loops, then a regular entry
+// at the same name. Opening the path ELOOPs; unlinking first does not.
+//
+// Measured on real artefacts — invisible-island.net/ncurses 6.6.0 for
+// linux/x86-64 would not unpack at all, while the aarch64 bottle of the same
+// version did.
+func TestExtractReplacesALoopingSymlink(t *testing.T) {
+	skipOnWASI(t, wasiNoSymlink)
+	dest := t.TempDir()
+	data := buildExtractTar(t, []tarEntry{
+		{name: "n/loop", typ: tar.TypeSymlink, link: "loop"},
+		{name: "n/loop", typ: tar.TypeReg, mode: 0o644, body: "terminfo"},
+	})
+	if err := extract(data, dest, 0); err != nil {
+		t.Fatalf("a looping symlink stopped the extraction: %v", err)
+	}
+	b, err := os.ReadFile(filepath.Join(dest, "n", "loop"))
+	if err != nil || string(b) != "terminfo" {
+		t.Errorf("n/loop = %q, %v", b, err)
+	}
+}
