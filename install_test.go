@@ -237,3 +237,31 @@ func TestBinNamesWithoutAVersionIsVerbatim(t *testing.T) {
 		t.Errorf("BinNames = %v, want the name verbatim", got)
 	}
 }
+
+// s390x's loader is not named after its architecture, and that is the whole
+// reason this entry cannot be derived: the other two read
+// `ld-linux-<arch>.so.N`, and extending that pattern gives
+// `ld-linux-s390x.so.1`, which does not exist.
+//
+// The name is asserted LITERALLY rather than through LoaderNameFor, so a
+// change to the table is a change to this test too. It comes from our own
+// s390x artefacts — 362 `ld64.so.1 is NEEDED` in that lane's logs with no
+// `ld-linux-*.so` at all, and `readelf -l` on the published libc.so.6
+// (go-pkgx/bk#263).
+func TestLoaderNameForS390x(t *testing.T) {
+	if got := LoaderNameFor("s390x"); got != "ld64.so.1" {
+		t.Errorf("LoaderNameFor(s390x) = %q, want ld64.so.1", got)
+	}
+	// And NOT what the neighbouring pattern would give.
+	if got := LoaderNameFor("s390x"); got == "ld-linux-s390x.so.1" {
+		t.Error("the s390x entry was derived from the pattern, not from an artefact")
+	}
+	// The architectures bk is tested on but builds no bottle for stay absent:
+	// there is no artefact to read a name out of, and a derived one is the
+	// defect this test exists for.
+	for _, arch := range []string{"ppc64le", "riscv64", "loong64"} {
+		if got := LoaderNameFor(arch); got != "" {
+			t.Errorf("LoaderNameFor(%s) = %q — added without an artefact to read it from", arch, got)
+		}
+	}
+}

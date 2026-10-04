@@ -109,13 +109,17 @@ func TestFindLoaderForTargetArch(t *testing.T) {
 	if err := os.MkdirAll(libDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, arch := range []string{"aarch64", "x86-64"} {
+	// s390x among them, and it is the one that matters here: its loader is
+	// NOT named after the architecture, so a lookup built by extending
+	// `ld-linux-<arch>.so.N` finds nothing in a tree where the file is
+	// plainly there.
+	for _, arch := range []string{"aarch64", "x86-64", "s390x"} {
 		if err := os.WriteFile(filepath.Join(libDir, LoaderNameFor(arch)), []byte{0x7f, 'E', 'L', 'F'}, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	for _, arch := range []string{"aarch64", "x86-64"} {
+	for _, arch := range []string{"aarch64", "x86-64", "s390x"} {
 		got := FindLoaderFor(dir, arch)
 		if filepath.Base(got) != LoaderNameFor(arch) {
 			t.Errorf("FindLoaderFor(%s) = %q, want the %s loader", arch, got, arch)
