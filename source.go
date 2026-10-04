@@ -52,6 +52,23 @@ var ErrSourceAbsent = errors.New("bottle: source not in the mirror")
 // referrers fallback uses.
 func SourceTag(sha256hex string) string { return "sha256-" + sha256hex }
 
+// PinTag is the registry tag recording WHICH digest a URL served.
+//
+// SourceTag addresses bytes; this addresses a *source*. The mirror is
+// content-addressed, which is right for storage and useless for the question
+// that matters on a rebuild: "is this the same tarball the last build got?"
+// Nothing in the pkgx recipe format answers it — exactly one recipe of 904
+// carries a `sha:` at all, and that one points at a `.sha256` served by the
+// same host, so it detects corruption and not substitution.
+//
+// A URL is hashed rather than escaped because an OCI tag may hold only
+// [A-Za-z0-9_.-], at most 128 characters, and a distributable URL has slashes,
+// colons and percent-escapes and is routinely longer than that.
+func PinTag(uri string) string {
+	sum := sha256.Sum256([]byte(uri))
+	return "url-" + hex.EncodeToString(sum[:])
+}
+
 // SourceDigest is the sha256 of data in lowercase hex, the form SourceTag takes
 // and the form a bottle's SBOM records.
 func SourceDigest(data []byte) string {
@@ -89,7 +106,61 @@ func (c *OCIClient) PushSource(project string, data []byte, uri string) (ocispec
 	if _, err := oras.Tag(ctx, repo, manDesc.Digest.String(), SourceTag(SourceDigest(data))); err != nil {
 		return manDesc, fmt.Errorf("tag source manifest: %w", err)
 	}
+	// A second tag, by URL, so the store can later answer what this URL
+	// served. It points at the SAME manifest: no extra blob, and the pin
+	// cannot drift from the bytes it describes.
+	//
+	// This overwrites an existing pin on purpose. The decision about whether
+	// the digest MAY change belongs to the caller, which checks PinnedDigest
+	// before pushing; a store that refused here would make a legitimate
+	// version bump unstorable.
+	if uri != "" {
+		if _, err := oras.Tag(ctx, repo, manDesc.Digest.String(), PinTag(uri)); err != nil {
+			return manDesc, fmt.Errorf("tag source url: %w", err)
+		}
+	}
 	return manDesc, nil
+}
+
+// PinnedDigest returns the sha256 the store last recorded for a URL, or
+// ErrSourceAbsent when it has never seen it.
+//
+// This is the read half of trust-on-first-use. The first fetch of a URL
+// records what it served; every later fetch compares. It does not make an
+// upstream trustworthy — it makes a CHANGE visible, which is the part nobody
+// had.
+//
+// It reads the digest off the manifest's layer rather than parsing it out of
+// the tag, so a pin can never claim a digest the stored bytes do not have.
+func (c *OCIClient) PinnedDigest(project, uri string) (string, error) {
+	ctx := context.Background()
+	repo, err := c.repository(project)
+	if err != nil {
+		return "", err
+	}
+	manDesc, err := repo.Resolve(ctx, PinTag(uri))
+	if err != nil {
+		if errors.Is(err, errdef.ErrNotFound) {
+			return "", fmt.Errorf("%w: %s %s", ErrSourceAbsent, project, uri)
+		}
+		return "", err
+	}
+	manBytes, err := orascontent.FetchAll(ctx, repo, manDesc)
+	if err != nil {
+		return "", err
+	}
+	var man ocispec.Manifest
+	if err := json.Unmarshal(manBytes, &man); err != nil {
+		return "", fmt.Errorf("pinned manifest for %s: %w", uri, err)
+	}
+	if len(man.Layers) != 1 {
+		return "", fmt.Errorf("pinned manifest for %s: %d layers, want 1", uri, len(man.Layers))
+	}
+	d := man.Layers[0].Digest
+	if d.Algorithm() != "sha256" {
+		return "", fmt.Errorf("pinned manifest for %s: layer digest is %s, want sha256", uri, d.Algorithm())
+	}
+	return d.Encoded(), nil
 }
 
 // PullSource fetches the archive stored for a sha256 digest, and VERIFIES that
