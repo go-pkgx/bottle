@@ -427,3 +427,84 @@ func TestExtractReplacesALoopingSymlink(t *testing.T) {
 		t.Errorf("n/loop = %q, %v", b, err)
 	}
 }
+
+// TestExtractRefusesASymlinkedParent is the contre-épreuve for extSafeParents.
+//
+// It is written to FAIL without the fix, which is the only way to know it
+// measures anything: the probe that found this reported
+//
+//	extract err=<nil> ; file outside dest = "ESCAPED"
+//
+// A name check is lexical and a write is not. Four entry kinds take the same
+// path through filepath.Dir + MkdirAll, so each is asserted separately rather
+// than trusting that one branch stands for the others.
+func TestExtractRefusesASymlinkedParent(t *testing.T) {
+	// The attack IS a symlink entry, so a platform that cannot make one
+	// cannot be vulnerable to it either — there is nothing here to measure.
+	skipOnWASI(t, wasiNoSymlink)
+
+	outside := func(t *testing.T) (dest, out string) {
+		t.Helper()
+		root := t.TempDir()
+		dest = filepath.Join(root, "dest")
+		out = filepath.Join(root, "outside")
+		for _, d := range []string{dest, out} {
+			if err := os.MkdirAll(d, 0o755); err != nil {
+				t.Fatalf("mkdir %s: %v", d, err)
+			}
+		}
+		return dest, out
+	}
+
+	for _, tc := range []struct {
+		name  string
+		entry tarEntry
+	}{
+		{"regular", tarEntry{name: "a/b", typ: tar.TypeReg, mode: 0o644, body: "ESCAPED"}},
+		{"dir", tarEntry{name: "a/b", typ: tar.TypeDir, mode: 0o755}},
+		{"symlink", tarEntry{name: "a/b", typ: tar.TypeSymlink, link: "elsewhere"}},
+		{"hardlink", tarEntry{name: "a/b", typ: tar.TypeLink, link: "seed"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dest, out := outside(t)
+			data := buildExtractTar(t, []tarEntry{
+				{name: "seed", typ: tar.TypeReg, mode: 0o644, body: "x"},
+				{name: "a", typ: tar.TypeSymlink, link: out},
+				tc.entry,
+			})
+			err := extract(data, dest, 0)
+			if !errors.Is(err, ErrInsecurePath) {
+				t.Fatalf("extract: got %v, want ErrInsecurePath", err)
+			}
+			// The error is the claim; the empty directory is the proof. An
+			// extractor can refuse an entry AFTER having written it.
+			ents, rerr := os.ReadDir(out)
+			if rerr != nil {
+				t.Fatalf("read outside dir: %v", rerr)
+			}
+			if len(ents) != 0 {
+				t.Fatalf("archive wrote %d entries outside dest: %v", len(ents), ents[0].Name())
+			}
+		})
+	}
+}
+
+// TestExtractStillNestsThroughRealDirectories is the positive control for the
+// test above. Tightening a check can make it refuse everything, and a refusal
+// of the attack is worth nothing without the proof that ordinary archives —
+// which are nested several levels deep, every one of them — still land.
+func TestExtractStillNestsThroughRealDirectories(t *testing.T) {
+	dest := t.TempDir()
+	data := buildExtractTar(t, []tarEntry{
+		{name: "a", typ: tar.TypeDir, mode: 0o755},
+		{name: "a/b", typ: tar.TypeDir, mode: 0o755},
+		{name: "a/b/c/d.txt", typ: tar.TypeReg, mode: 0o644, body: "deep"},
+	})
+	if err := extract(data, dest, 0); err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dest, "a", "b", "c", "d.txt"))
+	if err != nil || string(got) != "deep" {
+		t.Fatalf("nested file: %q, %v", got, err)
+	}
+}

@@ -80,10 +80,16 @@ func Extract(tr *tar.Reader, dest string, strip int) error {
 		mode := hdr.FileInfo().Mode()
 		switch hdr.Typeflag {
 		case tar.TypeDir:
+			if err := extSafeParents(dest, target); err != nil {
+				return err
+			}
 			if err := extMkdirAll(target, extPermOr(mode, 0o755)); err != nil {
 				return err
 			}
 		case tar.TypeSymlink:
+			if err := extSafeParents(dest, target); err != nil {
+				return err
+			}
 			if err := extMkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
@@ -92,6 +98,9 @@ func Extract(tr *tar.Reader, dest string, strip int) error {
 				return err
 			}
 		case tar.TypeLink:
+			if err := extSafeParents(dest, target); err != nil {
+				return err
+			}
 			if err := extMkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
@@ -104,6 +113,9 @@ func Extract(tr *tar.Reader, dest string, strip int) error {
 				return err
 			}
 		case tar.TypeReg:
+			if err := extSafeParents(dest, target); err != nil {
+				return err
+			}
 			if err := extMkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
@@ -209,6 +221,53 @@ func extLinkSource(dest, linkname string, strip int) (string, error) {
 		return "", fmt.Errorf("%w: link %q", ErrInsecurePath, linkname)
 	}
 	return source, nil
+}
+
+// extSafeParents refuses a target whose path crosses an existing SYMLINK.
+//
+// extSafeTarget keeps an entry's NAME inside dest, lexically. That is not the
+// same as keeping the WRITE inside dest: an earlier entry can make a
+// directory component a symlink, and every later entry under it resolves
+// through that link. The name passes, the write escapes.
+//
+//	a   -> /somewhere/else     (symlink entry)
+//	a/b                        (regular entry)
+//
+// `dest/a/b` is lexically inside dest, MkdirAll FOLLOWS `a`, and the body
+// lands in /somewhere/else/b. Measured before this existed: the probe found
+// the payload outside dest, with Extract returning nil.
+//
+// This is the sibling of the leaf case fixed one release earlier, which
+// unlinked a symlink standing where a regular file goes. That fix covered the
+// LAST component only. A defect in an extractor rarely has just one.
+//
+// Refused rather than unlinked. A leaf can be replaced, because the archive
+// says what belongs there; a directory component that is ALREADY a symlink
+// says the archive contradicts itself, and rebuilding the path silently would
+// discard whatever the link pointed at.
+//
+// target is always filepath.Join(dest, …) — extSafeTarget built it and
+// checked the containment — so the prefix below is exact and there is no
+// error to handle here.
+func extSafeParents(dest, target string) error {
+	rel := strings.TrimPrefix(target, dest+string(filepath.Separator))
+	parts := strings.Split(rel, string(filepath.Separator))
+	cur := dest
+	// Every component EXCEPT the last: the leaf is the caller's business, and
+	// the regular-file branch replaces a symlink there on purpose.
+	for _, p := range parts[:len(parts)-1] {
+		cur = filepath.Join(cur, p)
+		fi, err := os.Lstat(cur)
+		if err != nil {
+			// Not there yet: MkdirAll will create a real directory, and the
+			// next entry under it sees that.
+			return nil
+		}
+		if fi.Mode()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("%w: %q crosses the symlink %q", ErrInsecurePath, target, cur)
+		}
+	}
+	return nil
 }
 
 // extPermOr returns the permission bits of m, or fallback when m carries none
