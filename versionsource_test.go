@@ -61,15 +61,15 @@ func TestAVersionListSaysWhichRegistryItCameFrom(t *testing.T) {
 	// A tag listing spans every platform, so "the registry has the tag" is
 	// not "the registry has it for YOU". That second question has its own
 	// call, and the catalogue needs both.
-	c, err := NewOCIClient(DistBase)
-	if err != nil {
-		t.Fatal(err)
-	}
-	here, err := c.HasPlatform("zlib.net", "1.3.2", "linux", "aarch64")
+	newest := vs[len(vs)-1]
+	tag, here, err := PublishedTagFor("zlib.net", newest, "linux", "aarch64")
 	if err != nil || !here {
-		t.Errorf("HasPlatform(linux/aarch64) = %v, %v", here, err)
+		t.Errorf("PublishedTagFor(linux/aarch64) = %q, %v, %v", tag, here, err)
 	}
-	elsewhere, err := c.HasPlatform("zlib.net", "1.3.2", "darwin", "aarch64")
+	if tag != "1.3.2" {
+		t.Errorf("carried under tag %q", tag)
+	}
+	_, elsewhere, err := PublishedTagFor("zlib.net", newest, "darwin", "aarch64")
 	if err != nil {
 		t.Fatal(err)
 	}
