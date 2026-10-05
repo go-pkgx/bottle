@@ -361,3 +361,77 @@ func TestSonameProviders(t *testing.T) {
 		}
 	}
 }
+
+// The gconv modules live THREE levels under the prefix, because our glibc's
+// libdir is `lib/glibc-<marketing>` and its plugins go under that. A scan
+// that stopped at two reported six sonames as unprovided on a closure that
+// already held every one of their files:
+//
+//	pkgx: libCNS.so is NEEDED but no pkgx project is mapped to that soname
+//
+// The two-level case above still passes; this is the one that did not.
+func TestASonameThreeLevelsDownIsProvided(t *testing.T) {
+	prefix := filepath.Join(t.TempDir(), "gnu.org", "glibc", "v2.44")
+	gconv := filepath.Join(prefix, "lib", "glibc-2.44", "gconv")
+	if err := os.MkdirAll(gconv, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"libCNS.so", "libGB.so", "libJIS.so", "libKSC.so"} {
+		if err := os.WriteFile(filepath.Join(gconv, n), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := availableSonames([]string{prefix})
+	for _, n := range []string{"libCNS.so", "libGB.so", "libJIS.so", "libKSC.so"} {
+		if !got[n] {
+			t.Errorf("%s sits in the closure and is not counted as provided: %v", n, got)
+		}
+	}
+}
+
+// And a lib dir that is not there at all must be silence, not a walk error
+// leaking out: a bottle with no lib/ is ordinary.
+func TestAPrefixWithNoLibDir(t *testing.T) {
+	prefix := t.TempDir()
+	if got := availableSonames([]string{prefix}); len(got) != 0 {
+		t.Errorf("a prefix with no lib dir provided %v", got)
+	}
+}
+
+// The two entries added from the second sovereign generation, each checked
+// against an installed bottle rather than recalled. gnu.org/bison died on
+// libtextstyle.so.0 AFTER a successful build.
+func TestTheSonamesGen1Named(t *testing.T) {
+	for soname, want := range map[string]string{
+		"libtextstyle.so.0": "gnu.org/gettext",
+		"libpanelw.so.6":    "invisible-island.net/ncurses",
+		"libpanel.so.6":     "invisible-island.net/ncurses",
+	} {
+		if got := projectForSoname(soname); got != want {
+			t.Errorf("projectForSoname(%q) = %q, want %q", soname, got, want)
+		}
+	}
+}
+
+// The toolchain's OTHER C++ runtime. bk's sovereign driver flags link libc++,
+// not libstdc++, and the second sovereign generation showed what happens when
+// nothing supplies it at install time:
+//
+//	ninja: error while loading shared libraries: libc++.so.1
+//	pzstd: error while loading shared libraries: libc++.so.1
+func TestLibcxxIsAnImplicitRoot(t *testing.T) {
+	for _, soname := range []string{"libc++.so.1", "libc++abi.so.1", "libunwind.so.1"} {
+		got := implicitRoots(map[string]bool{soname: true})
+		if got["libcxx.llvm.org"] == "" {
+			t.Errorf("%s does not pull libcxx.llvm.org: %v", soname, got)
+		}
+	}
+	// And a closure that touches no C++ must not grow one.
+	if got := implicitRoots(map[string]bool{"libz.so.1": true}); got["libcxx.llvm.org"] != "" {
+		t.Errorf("libcxx was pulled for a C-only closure: %v", got)
+	}
+	// gcc's runtime is still gcc's: the two must not be confused.
+	if got := implicitRoots(map[string]bool{"libstdc++.so.6": true}); got["libcxx.llvm.org"] != "" {
+		t.Errorf("a libstdc++ consumer pulled llvm's runtime too: %v", got)
+	}
+}

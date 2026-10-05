@@ -2,6 +2,7 @@ package bottle
 
 import (
 	"debug/elf"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,6 +22,25 @@ var (
 	}
 	libstdcxxSonames = []string{"libgcc_s.so", "libstdc++.so"}
 	gccSonames       = []string{"libatomic.so", "libgomp.so", "libquadmath.so", "libitm.so"}
+	// The OTHER C++ runtime. libstdc++ above is gcc's; this is llvm's, and the
+	// sovereign toolchain links it — bk's own driver flags say
+	// `-stdlib=libc++ … --unwindlib=libunwind` out of ${BK_LIBCXX_PREFIX}.
+	// So anything bk builds in pkgx-libc mode that touches C++ NEEDs these
+	// three, and nothing supplied them at install time:
+	//
+	//	ninja: error while loading shared libraries: libc++.so.1
+	//	pzstd: error while loading shared libraries: libc++.so.1
+	//
+	// Implicit rather than an entry in sonameProject below, for the reason
+	// that map's comment gives: these are not a library a recipe forgot to
+	// declare, they are the toolchain's runtime — the same thing
+	// libstdcxxSonames is, from the other compiler.
+	//
+	// libunwind.so.1 is ambiguous ELSEWHERE — nongnu.org/libunwind ships one
+	// too — and is not ambiguous here: the pantry has no such project (its
+	// nongnu.org directory holds lzip and nothing else), and our binaries are
+	// linked against llvm's by the flags above.
+	libcxxSonames = []string{"libc++.so", "libc++abi.so", "libunwind.so"}
 )
 
 // sonameProject maps a shared-library soname stem to the pkgx project that
@@ -68,6 +88,15 @@ var sonameProject = map[string]string{
 	// eudev is the lightweight standalone libudev provider (a few files) vs
 	// pulling all of systemd (200+ binaries) just for libudev.so.1.
 	"libudev": "github.com/eudev-project/eudev",
+	// From the second sovereign generation, and each one CHECKED against an
+	// installed bottle rather than recalled: `ls ~/.pkgx/gnu.org/gettext/*/lib`
+	// lists libtextstyle in five versions, and ncurses' ships libpanel and
+	// libpanelw beside libncurses. gnu.org/bison died on the first of them —
+	//   bison: error while loading shared libraries: libtextstyle.so.0
+	// after a build that had succeeded.
+	"libtextstyle": "gnu.org/gettext",
+	"libpanel":     "invisible-island.net/ncurses",
+	"libpanelw":    "invisible-island.net/ncurses",
 }
 
 // sonamePrefixProject maps a soname PREFIX to its provider, for libraries that
@@ -187,6 +216,9 @@ func implicitRoots(needed map[string]bool) map[string]string {
 	if matchesAny(needed, gccSonames) {
 		roots["gnu.org/gcc"] = "*"
 	}
+	if matchesAny(needed, libcxxSonames) {
+		roots["libcxx.llvm.org"] = "*"
+	}
 	return roots
 }
 
@@ -249,15 +281,48 @@ func prefixesOf(closure []Resolved, dir string) []string {
 
 // availableSonames returns the set of shared-library sonames present in the
 // installed closure's lib dirs (what the closure already provides).
+//
+// # AT ANY DEPTH, BECAUSE A FIXED ONE WAS WRONG BY EXACTLY ONE LEVEL
+//
+// This used to glob `lib/*.so*` and `lib/*/*.so*`: the top of the lib dir and
+// one level under it, which covers the usual `lib/gconv/` plugin layout. Our
+// glibc does not have the usual layout. Its recipe sets
+//
+//	LIBDIR="{{prefix}}/lib/glibc-{{version.marketing}}"
+//
+// and says why in its own comment — "--libdir alone only affects gconv/audit
+// plugins" — so the gconv modules land at
+//
+//	lib/glibc-2.44/gconv/libCNS.so
+//
+// three levels down, one past where the glob looked. The second sovereign
+// generation reported the result on every test that touched iconv:
+//
+//	pkgx: libCNS.so is NEEDED but no pkgx project is mapped to that soname
+//	pkgx: libGB.so is NEEDED but no pkgx project is mapped to that soname
+//	pkgx: libJIS.so  … libKSC.so … libISOIR165.so … libJISX0213.so
+//
+// Six warnings, on a closure that already held every one of those files. The
+// map was never the problem — these are glibc's own modules and no entry
+// could name a better provider than the bottle already installed.
+//
+// A walk, not a deeper glob. The depth that was wrong here would be wrong
+// again at the next project that nests its libs, and a number chosen to fit
+// today's layouts is the same mistake with a larger constant.
 func availableSonames(prefixes []string) map[string]bool {
 	have := map[string]bool{}
 	for _, prefix := range prefixes {
 		for _, sub := range []string{"lib", "lib64"} {
-			matches, _ := filepath.Glob(filepath.Join(prefix, sub, "*.so*"))
-			deep, _ := filepath.Glob(filepath.Join(prefix, sub, "*", "*.so*"))
-			for _, m := range append(matches, deep...) {
-				have[filepath.Base(m)] = true
-			}
+			root := filepath.Join(prefix, sub)
+			_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+				if err != nil || d.IsDir() {
+					return nil
+				}
+				if base := filepath.Base(p); strings.Contains(base, ".so") {
+					have[base] = true
+				}
+				return nil
+			})
 		}
 	}
 	return have
