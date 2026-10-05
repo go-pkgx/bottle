@@ -2,6 +2,7 @@ package bottle
 
 import (
 	"debug/elf"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -68,6 +69,15 @@ var sonameProject = map[string]string{
 	// eudev is the lightweight standalone libudev provider (a few files) vs
 	// pulling all of systemd (200+ binaries) just for libudev.so.1.
 	"libudev": "github.com/eudev-project/eudev",
+	// From the second sovereign generation, and each one CHECKED against an
+	// installed bottle rather than recalled: `ls ~/.pkgx/gnu.org/gettext/*/lib`
+	// lists libtextstyle in five versions, and ncurses' ships libpanel and
+	// libpanelw beside libncurses. gnu.org/bison died on the first of them —
+	//   bison: error while loading shared libraries: libtextstyle.so.0
+	// after a build that had succeeded.
+	"libtextstyle": "gnu.org/gettext",
+	"libpanel":     "invisible-island.net/ncurses",
+	"libpanelw":    "invisible-island.net/ncurses",
 }
 
 // sonamePrefixProject maps a soname PREFIX to its provider, for libraries that
@@ -249,15 +259,48 @@ func prefixesOf(closure []Resolved, dir string) []string {
 
 // availableSonames returns the set of shared-library sonames present in the
 // installed closure's lib dirs (what the closure already provides).
+//
+// # AT ANY DEPTH, BECAUSE A FIXED ONE WAS WRONG BY EXACTLY ONE LEVEL
+//
+// This used to glob `lib/*.so*` and `lib/*/*.so*`: the top of the lib dir and
+// one level under it, which covers the usual `lib/gconv/` plugin layout. Our
+// glibc does not have the usual layout. Its recipe sets
+//
+//	LIBDIR="{{prefix}}/lib/glibc-{{version.marketing}}"
+//
+// and says why in its own comment — "--libdir alone only affects gconv/audit
+// plugins" — so the gconv modules land at
+//
+//	lib/glibc-2.44/gconv/libCNS.so
+//
+// three levels down, one past where the glob looked. The second sovereign
+// generation reported the result on every test that touched iconv:
+//
+//	pkgx: libCNS.so is NEEDED but no pkgx project is mapped to that soname
+//	pkgx: libGB.so is NEEDED but no pkgx project is mapped to that soname
+//	pkgx: libJIS.so  … libKSC.so … libISOIR165.so … libJISX0213.so
+//
+// Six warnings, on a closure that already held every one of those files. The
+// map was never the problem — these are glibc's own modules and no entry
+// could name a better provider than the bottle already installed.
+//
+// A walk, not a deeper glob. The depth that was wrong here would be wrong
+// again at the next project that nests its libs, and a number chosen to fit
+// today's layouts is the same mistake with a larger constant.
 func availableSonames(prefixes []string) map[string]bool {
 	have := map[string]bool{}
 	for _, prefix := range prefixes {
 		for _, sub := range []string{"lib", "lib64"} {
-			matches, _ := filepath.Glob(filepath.Join(prefix, sub, "*.so*"))
-			deep, _ := filepath.Glob(filepath.Join(prefix, sub, "*", "*.so*"))
-			for _, m := range append(matches, deep...) {
-				have[filepath.Base(m)] = true
-			}
+			root := filepath.Join(prefix, sub)
+			_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+				if err != nil || d.IsDir() {
+					return nil
+				}
+				if base := filepath.Base(p); strings.Contains(base, ".so") {
+					have[base] = true
+				}
+				return nil
+			})
 		}
 	}
 	return have
