@@ -146,8 +146,16 @@ func TestSetupScratchRootfsAt(t *testing.T) {
 			t.Errorf("%s/%s -> %q, %v", d, name, got, err)
 		}
 	}
-	if got, err := os.Readlink(filepath.Join(root, "bin", "sh")); err != nil || !strings.HasSuffix(got, "/bash") {
-		t.Errorf("bin/sh -> %q, %v", got, err)
+	// BOTH names. /bin/bash is not a convenience: the world's scripts say
+	// `#!/bin/bash`, and an unresolvable shebang fails as if the script
+	// itself were missing — which is how gnu.org/readline's test reported
+	// `fork/exec …/glibc/v2.44/bin/ldd: no such file or directory` for a
+	// bin/ldd that was right there.
+	for _, name := range []string{"sh", "bash"} {
+		got, err := os.Readlink(filepath.Join(root, "bin", name))
+		if err != nil || !strings.HasSuffix(got, "/bash") {
+			t.Errorf("bin/%s -> %q, %v", name, got, err)
+		}
 	}
 	// Idempotent: a second staging pass over the same directory is not an error.
 	if err := SetupScratchRootfsAt(root, name, "/x/"+name, "/x/sh"); err != nil {
