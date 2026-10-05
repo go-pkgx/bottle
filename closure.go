@@ -255,7 +255,8 @@ func isHostProvidedSoname(soname string) bool {
 // install of that same round, so libstdc++.so.6 still looks missing there.
 func isImplicitSoname(soname string) bool {
 	one := map[string]bool{soname: true}
-	return matchesAny(one, glibcSonames) || matchesAny(one, libstdcxxSonames) || matchesAny(one, gccSonames)
+	return matchesAny(one, glibcSonames) || matchesAny(one, libstdcxxSonames) ||
+		matchesAny(one, gccSonames) || matchesAny(one, libcxxSonames)
 }
 
 // matchesAny reports whether any needed soname starts with one of the prefixes.
