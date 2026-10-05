@@ -344,8 +344,29 @@ func SetupScratchRootfsAt(root, loaderName, loaderTarget, shellTarget string) er
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
-		if err := os.Symlink(shellTarget, filepath.Join(dir, "sh")); err != nil && !os.IsExist(err) {
-			return err
+		// BOTH names, and the second is not a convenience.
+		//
+		// /bin/sh is posed because make runs every recipe line through it.
+		// /bin/bash is posed because the WORLD'S scripts say `#!/bin/bash`,
+		// and a shebang that cannot be resolved fails as if the script
+		// itself were missing:
+		//
+		//	FAIL gnu.org/readline 8.3: fork/exec
+		//	  /pkgx/gnu.org/glibc/v2.44/bin/ldd: no such file or directory
+		//
+		// readline's test runs `ldd`, glibc ships bin/ldd as a generated
+		// BASH script, and the second sovereign generation's rootfs had no
+		// /bin/bash. ENOENT from exec names the script, never the
+		// interpreter, which is why this took a reading of the staging code
+		// rather than of the log.
+		//
+		// Both point at the same bash. Posing a shell at a canonical
+		// absolute path is a thing this rootfs already does and already
+		// argues for; `sh` alone was the arbitrary half.
+		for _, name := range []string{"sh", "bash"} {
+			if err := os.Symlink(shellTarget, filepath.Join(dir, name)); err != nil && !os.IsExist(err) {
+				return err
+			}
 		}
 	}
 	return nil
