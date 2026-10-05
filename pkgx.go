@@ -1598,6 +1598,12 @@ func extractedPrefix(tmp string, r Resolved) (path string, aliased bool) {
 // `pkgm` happily installed an unsigned bottle with PKGX_VERIFY=1 while only the
 // mirror tooling checked. A guarantee enforced on one path out of two is not a
 // guarantee.
+//
+// The claim in that first sentence has been wrong twice now, and both times
+// in the same way: a path was added that did not look like installing.
+// FetchCatalog was the second — a catalogue "is only a list of names", and a
+// list of names is what a person then types. Anything added here that pulls
+// bytes gets this call, whatever it does with them.
 func verifyPulled(c *OCIClient, project, ver, osn, arch string, data []byte) error {
 	sum := sha256.Sum256(data)
 	return verifyPulledDigest(c, project, ver, osn, arch, "sha256:"+hex.EncodeToString(sum[:]))

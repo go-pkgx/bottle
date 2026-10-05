@@ -62,6 +62,29 @@ Each of these rules has a test that fails without it, and a positive control
 that an ordinary nested archive still extracts: a check tightened too far
 refuses everything and reports green.
 
+## What gets verified
+
+With `PKGX_VERIFY` on — the default — **every** pull that brings bytes onto
+the machine checks the bottle's cosign signature against the pinned key and
+fails closed. Not "every install": every pull.
+
+That distinction is the whole of it, and it has been got wrong twice. The
+first time, the check lived in `DownloadBottle`, which only the mirror
+tooling calls, so `pkgx` and `pkgm` installed unsigned bottles while
+advertising otherwise. The second time was the **catalogue** — the list of
+project names `pkgx ls` and `<TAB>` read — which was fetched past the check
+because it is "only a list of names".
+
+A list of names is what a person then types. Forging it does not get an
+unsigned bottle installed, because the install path still verifies; it gets
+a near-miss name offered at the prompt, which is the whole of a typosquat.
+And since that catalogue is now fetched once and read from disk for days,
+it is verified *less* often than a bottle, not more — so the one check it
+gets has to happen.
+
+The rule, for anything added later: if it pulls bytes, it goes through
+`verifyPulled`, whatever it means to do with them.
+
 ## Where it is proven to work
 
 This package reads formats it did not write — ELF and Mach-O headers, OCI

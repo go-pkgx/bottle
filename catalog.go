@@ -416,10 +416,33 @@ func PublishCatalog(c *OCIClient, cat Catalog, osn, arch string) error {
 	return c.Push(CatalogProjectName, CatalogVersion, osn, arch, tgz, ExtTarGz)
 }
 
-// FetchCatalog pulls the catalogue for one platform.
+// FetchCatalog pulls the catalogue for one platform, and VERIFIES it.
+//
+// # WHY A LIST OF NAMES NEEDS A SIGNATURE
+//
+// This was the one path that brought bottle bytes onto a machine without
+// the fail-closed check every other bottle gets — which is precisely what
+// the comment above verifyPulled promised could not happen. It was missed
+// because a catalogue "is only a list of names", and that is the wrong way
+// round: a list of names is what a person then TYPES.
+//
+// Someone able to serve a forged catalogue — a compromised mirror, or a
+// PKGX_DIST pointed somewhere by a script — cannot make the install path
+// accept an unsigned bottle, because that path still verifies. What they
+// can do is decide what `<TAB>` offers, and a near-miss name offered at the
+// prompt is the whole of a typosquat. The attack is on the reader, not on
+// the installer, and the signature is the only thing that answers it.
+//
+// It also matters MORE than for an ordinary bottle now, not less: since
+// the catalogue became a file on disk, it is fetched once and then read by
+// every completion for days. A bottle is verified each time it is pulled;
+// this one is verified once and trusted thereafter.
 func FetchCatalog(c *OCIClient, osn, arch string) (Catalog, error) {
 	b, _, err := c.Pull(CatalogProjectName, CatalogVersion, osn, arch)
 	if err != nil {
+		return Catalog{}, err
+	}
+	if err := verifyPulled(c, CatalogProjectName, CatalogVersion, osn, arch, b); err != nil {
 		return Catalog{}, err
 	}
 	return CatalogFromTarball(b)
