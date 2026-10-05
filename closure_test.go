@@ -435,3 +435,32 @@ func TestLibcxxIsAnImplicitRoot(t *testing.T) {
 		t.Errorf("a libstdc++ consumer pulled llvm's runtime too: %v", got)
 	}
 }
+
+// The two lists have to agree. #114 added libc++ to implicitRoots, so the
+// closure PULLS it — and left isImplicitSoname alone, so every install that
+// touched C++ still printed
+//
+//	pkgx: libc++.so.1 is NEEDED but no pkgx project is mapped to that soname
+//
+// about a soname that now has one. A warning that contradicts what the
+// resolver just did is worse than no warning: it sends its reader looking
+// for a gap that was closed.
+func TestEveryImplicitRootIsAlsoAnImplicitSoname(t *testing.T) {
+	for _, group := range [][]string{glibcSonames, libstdcxxSonames, gccSonames, libcxxSonames} {
+		for _, stem := range group {
+			soname := stem
+			if !strings.HasSuffix(soname, ".so") {
+				soname += ".so"
+			}
+			soname += ".1"
+			if !isImplicitSoname(soname) {
+				t.Errorf("%s pulls an implicit root and is not an implicit soname — it will warn about itself", soname)
+			}
+		}
+	}
+	// And the inverse: an ordinary library is NOT implicit, or nothing would
+	// ever be resolved through the map.
+	if isImplicitSoname("libz.so.1") {
+		t.Error("libz.so.1 reads as implicit; the soname map would never be consulted")
+	}
+}
