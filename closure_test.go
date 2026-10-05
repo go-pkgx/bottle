@@ -412,3 +412,26 @@ func TestTheSonamesGen1Named(t *testing.T) {
 		}
 	}
 }
+
+// The toolchain's OTHER C++ runtime. bk's sovereign driver flags link libc++,
+// not libstdc++, and the second sovereign generation showed what happens when
+// nothing supplies it at install time:
+//
+//	ninja: error while loading shared libraries: libc++.so.1
+//	pzstd: error while loading shared libraries: libc++.so.1
+func TestLibcxxIsAnImplicitRoot(t *testing.T) {
+	for _, soname := range []string{"libc++.so.1", "libc++abi.so.1", "libunwind.so.1"} {
+		got := implicitRoots(map[string]bool{soname: true})
+		if got["libcxx.llvm.org"] == "" {
+			t.Errorf("%s does not pull libcxx.llvm.org: %v", soname, got)
+		}
+	}
+	// And a closure that touches no C++ must not grow one.
+	if got := implicitRoots(map[string]bool{"libz.so.1": true}); got["libcxx.llvm.org"] != "" {
+		t.Errorf("libcxx was pulled for a C-only closure: %v", got)
+	}
+	// gcc's runtime is still gcc's: the two must not be confused.
+	if got := implicitRoots(map[string]bool{"libstdc++.so.6": true}); got["libcxx.llvm.org"] != "" {
+		t.Errorf("a libstdc++ consumer pulled llvm's runtime too: %v", got)
+	}
+}

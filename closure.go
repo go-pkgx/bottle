@@ -22,6 +22,25 @@ var (
 	}
 	libstdcxxSonames = []string{"libgcc_s.so", "libstdc++.so"}
 	gccSonames       = []string{"libatomic.so", "libgomp.so", "libquadmath.so", "libitm.so"}
+	// The OTHER C++ runtime. libstdc++ above is gcc's; this is llvm's, and the
+	// sovereign toolchain links it — bk's own driver flags say
+	// `-stdlib=libc++ … --unwindlib=libunwind` out of ${BK_LIBCXX_PREFIX}.
+	// So anything bk builds in pkgx-libc mode that touches C++ NEEDs these
+	// three, and nothing supplied them at install time:
+	//
+	//	ninja: error while loading shared libraries: libc++.so.1
+	//	pzstd: error while loading shared libraries: libc++.so.1
+	//
+	// Implicit rather than an entry in sonameProject below, for the reason
+	// that map's comment gives: these are not a library a recipe forgot to
+	// declare, they are the toolchain's runtime — the same thing
+	// libstdcxxSonames is, from the other compiler.
+	//
+	// libunwind.so.1 is ambiguous ELSEWHERE — nongnu.org/libunwind ships one
+	// too — and is not ambiguous here: the pantry has no such project (its
+	// nongnu.org directory holds lzip and nothing else), and our binaries are
+	// linked against llvm's by the flags above.
+	libcxxSonames = []string{"libc++.so", "libc++abi.so", "libunwind.so"}
 )
 
 // sonameProject maps a shared-library soname stem to the pkgx project that
@@ -196,6 +215,9 @@ func implicitRoots(needed map[string]bool) map[string]string {
 	}
 	if matchesAny(needed, gccSonames) {
 		roots["gnu.org/gcc"] = "*"
+	}
+	if matchesAny(needed, libcxxSonames) {
+		roots["libcxx.llvm.org"] = "*"
 	}
 	return roots
 }
