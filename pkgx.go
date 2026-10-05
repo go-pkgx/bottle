@@ -588,6 +588,27 @@ func VersionsFor(project, osn, arch string) ([]Ver, error) {
 	return vs, err
 }
 
+// VersionsForSourced is VersionsFor plus WHERE the list came from: true when
+// it is this registry's tag listing, false when it is the upstream dist it
+// falls back to.
+//
+// A resolver does not care — either list resolves a constraint, and the
+// install still pulls from DistBase. A CATALOGUE does, and this exists
+// because it was about to get it wrong: `bk catalog --versions` would have
+// written UPSTREAM's versions beside a project this registry has never
+// published, and `pkgx ls` would have offered a version that cannot be
+// installed. "Available" is a claim about one registry, so a list from a
+// different one is not a weaker answer to the question — it is an answer to
+// another question.
+//
+// Pair it with OCIClient.HasPlatform to go from "this registry has the tag"
+// to "this registry has it FOR YOU": a tag listing spans every platform, so
+// a mirror wave that lands one architecture publishes a tag the other
+// cannot use.
+func VersionsForSourced(project, osn, arch string) ([]Ver, bool, error) {
+	return versionsForSourced(project, osn, arch)
+}
+
 // versionsForSourced is VersionsFor plus WHERE the list came from: true when it
 // is this registry's tag listing, false when it fell back to the upstream dist.
 // The distinction matters because the tag listing is not per-platform, so a
