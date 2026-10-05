@@ -371,3 +371,104 @@ func TestPublishAndFetchACatalogue(t *testing.T) {
 		t.Error("a platform with no catalogue returned one")
 	}
 }
+
+// A catalogue with a dependency DAG: curl needs openssl and zlib, openssl
+// needs zlib too (the diamond), and one dependency is not in the catalogue
+// at all.
+func depCatalog() Catalog {
+	return Catalog{
+		Generated: "2026-10-05T09:00:00Z",
+		Projects: []CatalogProject{
+			{Project: "curl.se", Versions: []string{"8.17.0"}, Deps: []string{"openssl.org", "zlib.net", "gone.invalid"}},
+			{Project: "openssl.org", Versions: []string{"3.6.4"}, Deps: []string{"zlib.net"}},
+			{Project: "zlib.net", Versions: []string{"1.3.2"}},
+		},
+	}
+}
+
+// What is under a PACKAGE node is what it needs — a different question
+// from what is under a NAMESPACE node, which is what it contains.
+func TestDepTree(t *testing.T) {
+	c := depCatalog()
+	top := c.DepTree("curl.se", 0)
+	var names []string
+	for _, n := range top {
+		names = append(names, n.Project)
+	}
+	if strings.Join(names, " ") != "gone.invalid openssl.org zlib.net" {
+		t.Fatalf("under curl.se = %v", names)
+	}
+	for _, n := range top {
+		switch n.Project {
+		case "openssl.org":
+			if n.Version != "3.6.4" || !n.Known {
+				t.Errorf("openssl = %+v", n)
+			}
+			// THE DIAMOND, and which side of it gets expanded. zlib is a
+			// direct dependency of curl AND of openssl. The one a reader
+			// came for is curl's own, so that is the one shown in full and
+			// this nested one is named as a repeat.
+			if len(n.Under) != 1 || n.Under[0].Project != "zlib.net" || !n.Under[0].Repeat {
+				t.Errorf("under openssl = %+v", n.Under)
+			}
+		case "zlib.net":
+			if n.Repeat {
+				t.Error("curl's own direct dependency is shown as a repeat; the nested one was expanded instead")
+			}
+		case "gone.invalid":
+			// A dependency the catalogue does not list must say so, not
+			// print like any other node.
+			if n.Known {
+				t.Error("a dependency with no catalogue entry is marked known")
+			}
+		}
+	}
+}
+
+// depth limits the walk, as `guix graph --max-depth` does, because a full
+// transitive graph of anything interesting is pages long.
+func TestDepTreeDepth(t *testing.T) {
+	c := depCatalog()
+	one := c.DepTree("curl.se", 1)
+	if len(one) != 3 {
+		t.Fatalf("depth 1 gave %d nodes", len(one))
+	}
+	for _, n := range one {
+		if len(n.Under) != 0 {
+			t.Errorf("depth 1 descended into %s", n.Project)
+		}
+	}
+	// And depth 0 is "no limit", not "nothing".
+	if deep := c.DepTree("curl.se", 0); len(deep) != 3 {
+		t.Errorf("depth 0 gave %d nodes", len(deep))
+	}
+}
+
+// A leaf, and a project that is not there at all. Neither is an error and
+// they are not the same thing — the caller distinguishes them with Lookup.
+func TestDepTreeOfALeafAndOfNothing(t *testing.T) {
+	c := depCatalog()
+	if got := c.DepTree("zlib.net", 0); len(got) != 0 {
+		t.Errorf("zlib has no dependencies; got %+v", got)
+	}
+	if got := c.DepTree("nope.invalid", 0); len(got) != 0 {
+		t.Errorf("an absent project has no subtree; got %+v", got)
+	}
+}
+
+// A CYCLE must terminate. Recipes have them — the closure walk in bottle
+// marks a project seen before descending for exactly this reason — and a
+// browser that recursed would hang on the first one.
+func TestDepTreeTerminatesOnACycle(t *testing.T) {
+	c := Catalog{Projects: []CatalogProject{
+		{Project: "a.org", Deps: []string{"b.org"}},
+		{Project: "b.org", Deps: []string{"a.org"}},
+	}}
+	got := c.DepTree("a.org", 0)
+	if len(got) != 1 || got[0].Project != "b.org" {
+		t.Fatalf("under a.org = %+v", got)
+	}
+	if len(got[0].Under) != 1 || !got[0].Under[0].Repeat {
+		t.Errorf("the cycle back to a.org is not marked as already shown: %+v", got[0].Under)
+	}
+}

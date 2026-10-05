@@ -57,6 +57,18 @@ type CatalogProject struct {
 	// Platforms as `os/arch`, sorted. Also legal empty, for the same reason.
 	Platforms []string `json:"platforms,omitempty"`
 	Summary   string   `json:"summary,omitempty"`
+	// Deps are the project's declared RUNTIME dependencies, reduced for the
+	// platform this catalogue is for, sorted.
+	//
+	// They are here so the dependency tree can be walked with NO NETWORK
+	// and no pantry: `pkgx --graph` answers the same question by resolving
+	// against the registry, which a scratch image cannot do before it has
+	// one, and which nobody can do on a train.
+	//
+	// RUNTIME only, deliberately. A build dependency is paid once by the
+	// factory and is not in anybody's installed closure; showing it under a
+	// node would answer a question the person browsing did not ask.
+	Deps []string `json:"deps,omitempty"`
 }
 
 // CatalogProject implements the one thing a tree browser needs beyond the
@@ -155,6 +167,94 @@ func (c *Catalog) Complete(partial string) []Node {
 		}
 	}
 	return out
+}
+
+// DepTree is the dependency subtree under a project, as a browser shows it.
+//
+// # WHY A SEPARATE SHAPE FROM Children
+//
+// A node has two kinds of thing under it and they are not the same
+// question. `gnu.org` has `gnu.org/bash` under it because of how it is
+// NAMED; `curl.se` has `openssl.org` under it because of what it NEEDS.
+// Nix, Guix and Spack keep the two apart as well — `guix graph` and
+// `nix-tree` walk the dependency graph, and neither is how you find out
+// what a channel contains.
+//
+// depth 0 means "no limit". `guix graph --max-depth` exists because a full
+// transitive graph of anything interesting is pages long, and the first
+// level is what a person reads.
+func (c *Catalog) DepTree(project string, depth int) []DepNode {
+	index := map[string]CatalogProject{}
+	for _, p := range c.Projects {
+		index[p.Project] = p
+	}
+	seen := map[string]bool{project: true}
+	var walk func(string, int) []DepNode
+	walk = func(p string, level int) []DepNode {
+		if depth > 0 && level >= depth {
+			return nil
+		}
+		kids := append([]string(nil), index[p].Deps...)
+		sort.Strings(kids)
+
+		// THE WHOLE LEVEL IS MARKED BEFORE ANY OF IT IS DESCENDED INTO.
+		//
+		// A DAG, not a tree: a project reached twice is named again and not
+		// expanded a second time, or a diamond turns a readable tree into
+		// pages of the same subtree — `pkgx --graph` says the same in its
+		// own comment.
+		//
+		// Marking level-by-level rather than as the walk goes decides WHICH
+		// of the two occurrences gets expanded, and the first version of
+		// this got it backwards: curl declares openssl and zlib, openssl
+		// declares zlib, and a depth-first mark expanded zlib UNDER OPENSSL
+		// and showed curl's own direct dependency as a repeat. A project's
+		// direct dependencies are the ones a reader came for.
+		var fresh []string
+		for _, d := range kids {
+			if !seen[d] {
+				seen[d] = true
+				fresh = append(fresh, d)
+			}
+		}
+		isFresh := map[string]bool{}
+		for _, d := range fresh {
+			isFresh[d] = true
+		}
+
+		out := make([]DepNode, 0, len(kids))
+		for _, d := range kids {
+			n := DepNode{Project: d}
+			if e, ok := index[d]; ok {
+				n.Known = true
+				if len(e.Versions) > 0 {
+					n.Version = e.Versions[0]
+				}
+			}
+			if isFresh[d] {
+				n.Under = walk(d, level+1)
+			} else {
+				n.Repeat = true
+			}
+			out = append(out, n)
+		}
+		return out
+	}
+	return walk(project, 0)
+}
+
+// DepNode is one dependency, and what hangs under it.
+type DepNode struct {
+	Project string
+	Version string
+	// Known is false for a dependency the catalogue does not list. It
+	// happens, and saying so is the point: a name with nothing behind it is
+	// a hole in the catalogue or a project that resolves from somewhere
+	// else, and a browser that printed it like any other node would hide
+	// both.
+	Known  bool
+	Repeat bool // already shown higher up; not descended into
+	Under  []DepNode
 }
 
 // Age is how old the catalogue is, in words. A browser that cannot reach the
