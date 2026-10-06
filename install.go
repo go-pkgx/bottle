@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -123,6 +124,55 @@ func PrefixOf(project string, closure []Resolved, dir string) string {
 		}
 	}
 	return ""
+}
+
+// InstalledVersions lists the versions of a project present in a store,
+// newest first.
+//
+// The other direction from PrefixOf: that one COMPOSES a path from a
+// version somebody already resolved, this one ENUMERATES what is on disk.
+// Nothing asked the second question until a browser wanted to mark what you
+// already have, and the convention — <dir>/<project>/v<version> — was
+// spelled out at nine call sites with no reader anywhere.
+//
+// Newest first by VERSION order, not by name: a directory listing is
+// alphabetical, and alphabetically "v1.9" sorts above "v1.10", so the first
+// entry would be the wrong one to put beside a project's name.
+//
+// The `v1` / `v1.2` / `v*` ALIASES writeVersionLinks leaves beside the real
+// directories are symlinks, and os.ReadDir lstats, so their IsDir is false
+// and the directory filter drops them. That is load-bearing rather than
+// incidental: counted as versions they would make one install look like
+// three, and `pkgx ls` would say a project has versions nobody can name.
+//
+// An unreadable or absent directory is no versions, not an error. "Nothing
+// installed" is the normal state of almost every project in a catalogue of
+// two thousand, and a browser cannot stop to report it.
+func InstalledVersions(project, dir string) []string {
+	ents, err := os.ReadDir(filepath.Join(dir, project))
+	if err != nil {
+		return nil
+	}
+	var vs []Ver
+	for _, e := range ents {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), "v") {
+			continue
+		}
+		raw := strings.TrimPrefix(e.Name(), "v")
+		// A digit after the v is what tells a version directory from a
+		// word. It also drops the `v*` alias, whose second character is
+		// not one.
+		if raw == "" || raw[0] < '0' || raw[0] > '9' {
+			continue
+		}
+		vs = append(vs, ParseVer(raw))
+	}
+	sort.Slice(vs, func(i, j int) bool { return cmpVer(vs[i], vs[j]) > 0 })
+	out := make([]string, 0, len(vs))
+	for _, v := range vs {
+		out = append(out, v.Raw)
+	}
+	return out
 }
 
 // Stage describes where a closure's bottles LIVE while stubs are written and
