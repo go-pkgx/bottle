@@ -588,6 +588,43 @@ func VersionsFor(project, osn, arch string) ([]Ver, error) {
 	return vs, err
 }
 
+// VersionsForSourced is VersionsFor plus WHERE the list came from: true when
+// it is this registry's tag listing, false when it is the upstream dist it
+// falls back to.
+//
+// A resolver does not care — either list resolves a constraint, and the
+// install still pulls from DistBase. A CATALOGUE does, and this exists
+// because it was about to get it wrong: `bk catalog --versions` would have
+// written UPSTREAM's versions beside a project this registry has never
+// published, and `pkgx ls` would have offered a version that cannot be
+// installed. "Available" is a claim about one registry, so a list from a
+// different one is not a weaker answer to the question — it is an answer to
+// another question.
+//
+// Pair it with PublishedTagFor to go from "this registry has the tag" to
+// "this registry has it FOR YOU": a tag listing spans every platform, so a
+// mirror wave that lands one architecture publishes a tag the other cannot
+// use.
+func VersionsForSourced(project, osn, arch string) ([]Ver, bool, error) {
+	return versionsForSourced(project, osn, arch)
+}
+
+// PublishedTagFor reports whether THIS registry carries a version for a
+// platform, and under which tag.
+//
+// The second half of the catalogue's question, and the reason it is this
+// rather than a bare OCIClient.HasPlatform: one version has several
+// spellings and they do not always hold the same platforms — gnu.org/tar
+// has its linux bottles under `1.35` and its darwin ones under `1.35.0`.
+// Asking about one spelling answers about one spelling. This asks about the
+// version.
+//
+// It also goes through the cached client, which matters when the caller is
+// a catalogue build asking about two thousand projects in a row.
+func PublishedTagFor(project string, v Ver, osn, arch string) (string, bool, error) {
+	return publishedTagFor(project, v, osn, arch)
+}
+
 // versionsForSourced is VersionsFor plus WHERE the list came from: true when it
 // is this registry's tag listing, false when it fell back to the upstream dist.
 // The distinction matters because the tag listing is not per-platform, so a
