@@ -69,6 +69,7 @@ func (c *OCIClient) writeBlobFrom(ctx context.Context, url string, offset int64,
 // exercise the failure paths a real disk will not produce on demand.
 var (
 	osCreateTemp = os.CreateTemp
+	osMkdirAll   = os.MkdirAll
 	osRemove     = os.Remove
 	ioCopy       = io.Copy
 	ioReadAll    = io.ReadAll
