@@ -26,6 +26,15 @@ import (
 // The summary is searched too, because the six cost nothing. It is not what
 // makes this useful.
 
+// minSubstringQuery is the shortest query that may match inside a name.
+//
+// Two characters is not a search, it is a sieve: every `.org` project
+// contains "rg". Three is where it starts meaning something — "ssl" finds
+// openssl.org, "jpg" finds the image tools — and a two-character query is
+// almost always a COMMAND, which matches exactly and by prefix regardless
+// of this.
+const minSubstringQuery = 3
+
 // SearchHit is one result, with the reason it matched.
 type SearchHit struct {
 	Project string
@@ -104,6 +113,19 @@ func scoreProject(p CatalogProject, q string) (SearchHit, bool) {
 	switch {
 	case strings.ToLower(leaf) == q:
 		take(1, "name", p.Project)
+	case len(q) < minSubstringQuery:
+		// Too short to mean anything as a SUBSTRING of a name. Measured
+		// on the published catalogue: `search rg` returned 625 projects,
+		// of which 550 matched only because "rg" sits inside ".org" —
+		// the one result anybody wanted was first, and 550 lines of
+		// noise stood behind it.
+		//
+		// A length rule rather than a cleverer one, because the obvious
+		// cleverer rule is wrong: requiring the match to START a label
+		// would drop ".org" and would ALSO drop "ssl" inside
+		// "openssl.org", which is the best answer to that query. The
+		// thing short queries are good for is commands, and those still
+		// match exactly and by prefix above.
 	case strings.Contains(strings.ToLower(leaf), q):
 		take(3, "name", p.Project)
 	case strings.Contains(lower, q):
