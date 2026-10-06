@@ -327,9 +327,19 @@ func UnmarshalCatalog(b []byte) (Catalog, error) {
 	// those call sites — and the whole catalogue is refused, because one
 	// forged name in a list means the list was written by somebody who
 	// wanted it to do something else.
-	for _, p := range c.Projects {
+	for i := range c.Projects {
+		p := &c.Projects[i]
 		if err := ValidateProjectName(p.Project); err != nil {
 			return Catalog{}, fmt.Errorf("catalog: %w", err)
+		}
+		// The two fields that are TEXT and reach a terminal. A name is
+		// refused because a bad one means somebody wanted something; a
+		// summary is stripped, because it is cosmetic and refusing a
+		// whole catalogue over one paragraph would deny service for a
+		// typo. See displayText.
+		p.Summary = displayText(p.Summary, summaryLimit)
+		for j, cmd := range p.Provides {
+			p.Provides[j] = displayText(cmd, commandLimit)
 		}
 		for _, d := range p.Deps {
 			if err := ValidateProjectName(d); err != nil {
@@ -476,3 +486,11 @@ func FetchCatalog(c *OCIClient, osn, arch string) (Catalog, error) {
 	}
 	return CatalogFromTarball(b)
 }
+
+// summaryLimit and commandLimit bound two strings that arrive from a
+// recipe and are printed. A line that overflows a terminal is its own kind
+// of noise, and an unbounded field in a published artefact is an invitation.
+const (
+	summaryLimit = 200
+	commandLimit = 64
+)
