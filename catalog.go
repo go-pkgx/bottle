@@ -69,6 +69,19 @@ type CatalogProject struct {
 	// factory and is not in anybody's installed closure; showing it under a
 	// node would answer a question the person browsing did not ask.
 	Deps []string `json:"deps,omitempty"`
+	// Provides are the COMMAND names this project puts on PATH, without
+	// their `bin/` prefix, sorted.
+	//
+	// Here because it is the only metadata in this pantry a search can
+	// work on. Measured on 1907 recipes: 1592 declare `provides` and
+	// SIX carry a summary. `nix search` and `guix search` look in the
+	// description, which is the right design for a collection that has
+	// descriptions; here it would find almost nothing.
+	//
+	// And it answers the question people actually arrive with. You know
+	// the command, not the package: `rg` is `crates.io/ripgrep`, which no
+	// amount of guessing at the name reaches.
+	Provides []string `json:"provides,omitempty"`
 }
 
 // CatalogProject implements the one thing a tree browser needs beyond the
