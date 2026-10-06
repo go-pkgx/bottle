@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"path/filepath"
 
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
@@ -25,9 +26,38 @@ import (
 // 2 GiB micro-VM: `Out of memory: Killed process (pkgx) total-vm:3329636kB`.
 // Streaming to disk makes the floor the bottle's SIZE ON DISK, which the install
 // needs anyway.
+// blobStagingDir is where a blob is assembled: inside the STORE, not in the
+// system temp directory.
+//
+// `FROM scratch` has no /tmp. Nothing in this package noticed, because
+// every machine a test ever ran on had one — and the claim this package
+// makes, in its own first paragraph, is that it works on an image whose
+// only file is the binary. Caught by building that image and running it:
+//
+//	pkgx: catalog update: blob sha256:6fc3caf…: temp file:
+//	      open /tmp/bottle-blob-1245446855: no such file or directory
+//
+// The store is the one directory that must exist for any of this to mean
+// anything, so it is the honest place to stage. Two things come free: the
+// blob lands on the same filesystem as its destination, and a container
+// given a store volume no longer needs a second writable mount for a file
+// it deletes seconds later.
+//
+// It falls back to the system temp directory when the store cannot be
+// made — a read-only $PKGX_DIR is somebody's deliberate arrangement, and
+// refusing to fetch at all would be a worse answer than the behaviour
+// every release until now had.
+func blobStagingDir() string {
+	d := filepath.Join(Dir(), ".local", "tmp")
+	if err := osMkdirAll(d, 0o755); err != nil {
+		return ""
+	}
+	return d
+}
+
 func (c *OCIClient) fetchBlobFile(ctx context.Context, project string, desc ocispec.Descriptor) (*BlobFile, error) {
 	url := c.scheme() + "://" + c.host + "/v2/" + c.repoName(project) + "/blobs/" + desc.Digest.String()
-	f, err := osCreateTemp("", "bottle-blob-*")
+	f, err := osCreateTemp(blobStagingDir(), "bottle-blob-*")
 	if err != nil {
 		return nil, fmt.Errorf("blob %s: temp file: %w", desc.Digest, err)
 	}
