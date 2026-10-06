@@ -201,6 +201,12 @@ func (c *OCIClient) repoName(project string) string {
 
 // repository builds an ORAS remote.Repository for a project.
 func (c *OCIClient) repository(project string) (*remote.Repository, error) {
+	// The same name, in the other kind of path. A registry reference is
+	// not a filesystem path, but it is still assembled by concatenation
+	// and a `..` in it is nobody's project.
+	if err := ValidateProjectName(project); err != nil {
+		return nil, err
+	}
 	repo, err := remote.NewRepository(c.host + "/" + c.repoName(project))
 	if err != nil {
 		return nil, err

@@ -155,6 +155,13 @@ func ParseLock(src []byte, path string) (Lock, error) {
 		if !ok {
 			return Lock{}, fmt.Errorf("%s: %q is not a { version = …, spec = … } entry", path, proj)
 		}
+		// A lock is a file fetched from a repository and ACTED ON, so a
+		// name in it is as untrusted as one in a catalogue. Refused
+		// here, where the whole file can be rejected, rather than deep
+		// in a URL builder where only one lookup would fail.
+		if err := ValidateProjectName(proj); err != nil {
+			return Lock{}, fmt.Errorf("%s: %w", path, err)
+		}
 		d.Pins = append(d.Pins, LockPin{proj, lockString(e["version"]), lockString(e["spec"])})
 	}
 	sort.Slice(d.Pins, func(i, j int) bool { return d.Pins[i].Project < d.Pins[j].Project })

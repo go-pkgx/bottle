@@ -210,6 +210,12 @@ func fetchSide(base, project string) (map[string]any, bool, error) {
 	if base == "" {
 		return nil, false, nil
 	}
+	// THE NAME GOES INTO A URL BY CONCATENATION, so it is checked here
+	// rather than wherever it was typed: it mostly was not typed at all,
+	// but read out of a lock or a catalogue. See ValidateProjectName.
+	if err := ValidateProjectName(project); err != nil {
+		return nil, false, err
+	}
 	// HCL first, and only then YAML. Our own overlay is written in HCL;
 	// upstream's pantry is YAML.
 	for _, name := range []string{"package.hcl", "package.yml"} {

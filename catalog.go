@@ -321,6 +321,22 @@ func UnmarshalCatalog(b []byte) (Catalog, error) {
 	if c.Generated == "" && c.Projects == nil {
 		return Catalog{}, fmt.Errorf("catalog: no `generated` and no `projects` — this is not a catalogue")
 	}
+	// A catalogue is pulled from a registry and read by `pkgx ls`, by
+	// `search`, and by EVERY <TAB>. Its names end up in URLs and registry
+	// references, so they are checked once here rather than at each of
+	// those call sites — and the whole catalogue is refused, because one
+	// forged name in a list means the list was written by somebody who
+	// wanted it to do something else.
+	for _, p := range c.Projects {
+		if err := ValidateProjectName(p.Project); err != nil {
+			return Catalog{}, fmt.Errorf("catalog: %w", err)
+		}
+		for _, d := range p.Deps {
+			if err := ValidateProjectName(d); err != nil {
+				return Catalog{}, fmt.Errorf("catalog: %s declares %w", p.Project, err)
+			}
+		}
+	}
 	return c, nil
 }
 
