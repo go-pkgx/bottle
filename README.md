@@ -28,6 +28,10 @@ so both tools share one source of truth for the bottle protocol.
   ABI needs (not merely the latest), so drifted sonames resolve.
 - Embedded Mozilla CA bundle (`net/http` with no system trust store), pure-Go
   DNS.
+- **Nothing outside the store.** A blob is staged inside `$PKGX_DIR`, not in
+  the system temp directory: `FROM scratch` has no `/tmp`, and until this was
+  measured by building that image and running it, `pkgx catalog update` failed
+  on the one image this package exists to serve.
 
 ## What `Extract` refuses
 
@@ -84,6 +88,61 @@ gets has to happen.
 
 The rule, for anything added later: if it pulls bytes, it goes through
 `verifyPulled`, whatever it means to do with them.
+
+## What a project NAME may be
+
+A name is a name. It is not a path and it is not a URL fragment — and it
+reached one anyway, because every lookup builds a URL by concatenation:
+
+```go
+fmt.Sprintf("%s/%s/%s", base, project, "package.yml")
+```
+
+Go sends a request path **verbatim** — it does not clean `..` — and
+`raw.githubusercontent.com` answers a traversing path with a **307** to the
+normalised one, which Go's client follows. Measured, not reasoned about:
+
+```
+httpGet(".../pkgxdev/pantry/main/projects/../../../../go-pkgx/pantry-overlay/main/README.md")
+→ 1270 bytes of ANOTHER repository's file
+```
+
+A recipe is not inert. It declares dependencies, a build script and the
+runtime environment a package exports, so fetching one from a repository an
+attacker chose is the whole game.
+
+The check is where the name is **used** — the HTTP pantry lookup, the OCI
+reference, `ParseLock`, `UnmarshalCatalog` — because hardly any of these
+names were typed. They arrive in a **lock** fetched from a repository, in a
+**catalogue** pulled from a registry and read by every `<TAB>`, and in the
+dependency lists inside both. One forged name refuses the whole lock or
+catalogue: a hostile member means the list was written to be one.
+
+An **allowlist**, not a list of dangerous spellings — `..` is obvious,
+`..%2f` is not, and the probe showed it reaching a different path. Segments
+of `[A-Za-z0-9._+-]`, at most 8, at most 200 characters. All 1908 published
+projects fit; the deepest is four segments
+(`github.com/GoogleContainerTools/container-structure-test`), and that list
+is the test's positive control, because a rule tightened too far refuses
+everything and reports green.
+
+## The lock format lives here
+
+`bk lock` wrote locks and nothing could read one back, because the reader
+was in bk's `package main` — importable by nothing. A format with exactly
+one program able to read it has not left the program it was written for,
+and the whole point of a lock is that something **else** acts on it later.
+
+So the format is here — `Lock`, `LockPin`, `RenderLock`, `ParseLock`,
+`ReadLock`, `LockAge` — and the **resolution** stays in bk, which is the
+real seam: deciding what a set means today needs a pantry, an overrides set
+and a version resolver; reading a file that records the answer needs none
+of them. Writing moved with reading, because a format whose two ends live
+in different repositories is a round trip waiting to break on a field one
+side forgot.
+
+The version rule is Spack's: new readers read old locks, old readers refuse
+new ones.
 
 ## Where it is proven to work
 
