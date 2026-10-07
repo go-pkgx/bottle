@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
 )
@@ -229,25 +231,6 @@ func TestHCLIntegersDoNotBecomeFloats(t *testing.T) {
 	}
 }
 
-// yaml.v3 can emit a block scalar it cannot re-read: a string whose first line
-// is indented gets an indentation indicator that does not match its body.
-// Demonstrated with no HCL involved — priver.dev/geni's package.yml does not
-// survive yaml.Unmarshal → yaml.Marshal → yaml.Unmarshal.
-//
-// Upstream recipes never reach HCLToYAML, so the defect is invisible there. An
-// HCL recipe of the same shape would hand the caller YAML that fails to parse
-// somewhere further along, which is why this refuses instead.
-func TestHCLToYAMLRefusesUnreadableOutput(t *testing.T) {
-	src := "test {\n  script = [\n    { fixture = <<EOT\n    indented first line\nsecond\nEOT\n    },\n  ]\n}\n"
-	_, err := HCLToYAML([]byte(src), "geni.hcl")
-	if err == nil {
-		t.Skip("yaml.v3 now round-trips this shape; the guard is no longer exercised here")
-	}
-	if !strings.Contains(err.Error(), "cannot be read back") || !strings.Contains(err.Error(), "geni.hcl") {
-		t.Errorf("the refusal must name the file and the cause: %v", err)
-	}
-}
-
 // A recipe the client cannot read is an ERROR naming the project.
 //
 // The overlay is HCL and upstream is converted to HCL on the way in, so this
@@ -306,5 +289,121 @@ func TestAnAttributeNameCannotCarryAnEscape(t *testing.T) {
 	// reader needs to know which attribute was wrong.
 	if !strings.Contains(err.Error(), "ab") && !strings.Contains(err.Error(), "a") {
 		t.Errorf("the attribute was lost with the escapes: %q", err.Error())
+	}
+}
+
+// A LEGAL HCL RECIPE IS NOT REFUSED FOR A YAML QUIRK.
+//
+// yaml.v3 picks a literal block scalar for a multi-line string and, when the
+// first line is indented, emits an indentation indicator that does not match
+// the body — YAML it cannot itself re-read. priver.dev/geni's package.yml
+// does not survive yaml.Unmarshal → yaml.Marshal → yaml.Unmarshal, with no
+// HCL involved at all.
+//
+// The previous answer was to detect that and REFUSE the recipe. But the
+// recipe is legal HCL; what cannot express it is the YAML hop in the middle,
+// and refusing a valid input because of an intermediate format is the wrong
+// way round. The string is now written double-quoted, which carries any
+// string there is.
+func TestAnIndentedFirstLineSurvivesTheYAMLHop(t *testing.T) {
+	src := "test {\n  script = [\n    { fixture = <<EOT\n    indented first line\nsecond\nEOT\n    },\n  ]\n}\n"
+	out, err := HCLToYAML([]byte(src), "geni.hcl")
+	if err != nil {
+		t.Fatalf("a legal HCL recipe was refused: %v", err)
+	}
+	// IT READS BACK, which is the property the refusal was protecting.
+	var back map[string]any
+	if err := yaml.Unmarshal(out, &back); err != nil {
+		t.Fatalf("the YAML does not parse: %v\n%s", err, out)
+	}
+	// AND THE STRING IS INTACT — a style that round-trips is worth nothing if
+	// it round-trips something else. The leading spaces are the whole point.
+	got := back["test"].(map[string]any)["script"].([]any)[0].(map[string]any)["fixture"]
+	want := "    indented first line\nsecond\n"
+	if got != want {
+		t.Errorf("fixture = %q, want %q", got, want)
+	}
+}
+
+// AND THE ORDINARY SHAPES ARE UNTOUCHED. This conversion feeds a schema
+// validator over the whole pantry; restyling every scalar for tidiness would
+// make the change unreviewable, so only the unsafe shape moves.
+func TestOrdinaryScalarsKeepTheirStyle(t *testing.T) {
+	out, err := HCLToYAML([]byte("build {\n  script = <<EOT\nmake install\nmake check\nEOT\n}\n"), "x.hcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A block scalar, as before: the first line is not indented, so nothing
+	// was unsafe about it.
+	if !strings.Contains(string(out), "|") {
+		t.Errorf("a safe multi-line string stopped being a block scalar:\n%s", out)
+	}
+}
+
+// KEYS COME OUT SORTED, which yaml.Marshal did for a map and this hand-built
+// node tree has to keep doing.
+//
+// Nothing downstream depends on the order — the schema validator reads the
+// document, not the bytes — so the reason is REVIEWABILITY: this conversion
+// is run over the whole pantry, and a reshuffle would turn a one-line change
+// into a diff nobody can read. A claim like that in a comment is worth
+// nothing unless something checks it; mutate reversed the sort and the suite
+// did not notice.
+func TestConvertedKeysComeOutSorted(t *testing.T) {
+	out, err := HCLToYAML([]byte("zebra = 1\nalpha = 2\nmiddle = 3\n"), "x.hcl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if k, _, ok := strings.Cut(line, ":"); ok && !strings.HasPrefix(line, " ") {
+			order = append(order, k)
+		}
+	}
+	if !reflect.DeepEqual(order, []string{"alpha", "middle", "zebra"}) {
+		t.Errorf("keys came out %v, want them sorted:\n%s", order, out)
+	}
+}
+
+// THE SHAPES YAML MANGLES, measured rather than predicted — and this is the
+// test that pins the whole retry, because every rule anybody wrote about it
+// was wrong.
+//
+// Marshalled with yaml.v3 and read back, no HCL involved:
+//
+//	"    first\nsecond\n"  round-trips       ← the rule in the code said it failed
+//	"\tfirst\nsecond\n"    cannot be read back
+//	"\nsecond\n"           comes back one line SHORTER, and parses fine
+//
+// The last is priver.dev/geni's `fixture: |`. And the same string round-trips
+// at the top of a document but NOT three levels down, which is why a probe of
+// the string alone could not decide either. HCLToYAML therefore verifies the
+// whole document and retries quoted.
+func TestTheShapesTheRetryIsFor(t *testing.T) {
+	for name, src := range map[string]string{
+		"a leading blank line, nested deep": "test {\n  script = [\n    { fixture = <<EOT\n\n    CREATE TABLE x (\n        y int\n    )\nEOT\n    },\n  ]\n}\n",
+		"an indented first line, nested":    "test {\n  script = [\n    { fixture = <<EOT\n    indented first line\nsecond\nEOT\n    },\n  ]\n}\n",
+		"a tab-indented first line":         "build {\n  script = <<EOT\n\tfirst\nsecond\nEOT\n}\n",
+	} {
+		out, err := HCLToYAML([]byte(src), "shape.hcl")
+		if err != nil {
+			t.Errorf("%s: a legal HCL recipe was refused: %v", name, err)
+			continue
+		}
+		want, err := HCLToMap([]byte(src), "shape.hcl")
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		var back any
+		if err := yaml.Unmarshal(out, &back); err != nil {
+			t.Errorf("%s: the YAML does not parse: %v\n%s", name, err, out)
+			continue
+		}
+		// THE DOCUMENT, not just "it parses": the leading-blank-line case
+		// parses perfectly and is a line short, which is the whole reason
+		// the comparison exists.
+		if !sameDocument(want, back) {
+			t.Errorf("%s: the document changed through the YAML hop\n%s", name, out)
+		}
 	}
 }
