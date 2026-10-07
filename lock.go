@@ -140,6 +140,20 @@ func ParseLock(src []byte, path string) (Lock, error) {
 		Pantry:    lockString(m["pantry"]),
 		Overlay:   lockString(m["overlay"]),
 	}
+	// THE VERSION IS READ BEFORE THE CONTENTS, and that order is the whole
+	// point of having one: it has to say "stop, you cannot interpret what
+	// follows" BEFORE this build interprets it by its own rules.
+	//
+	// Checked last, as it was, a lock from a newer bk is first judged
+	// against this build's expectations — so a format that renamed or
+	// restructured `locked` would be reported as "this is not a lock",
+	// which is false and sends the reader hunting for a corrupt file
+	// instead of for a newer binary.
+	if d.Version > LockfileVersion {
+		return Lock{}, fmt.Errorf("%s: lockfile_version %d, and this build understands %d — "+
+			"read it with a newer one rather than with this, which would miss whatever the "+
+			"bump was for", path, d.Version, LockfileVersion)
+	}
 	for _, r := range lockSlice(m["roots"]) {
 		d.Roots = append(d.Roots, lockString(r))
 	}
@@ -165,11 +179,6 @@ func ParseLock(src []byte, path string) (Lock, error) {
 		d.Pins = append(d.Pins, LockPin{proj, lockString(e["version"]), lockString(e["spec"])})
 	}
 	sort.Slice(d.Pins, func(i, j int) bool { return d.Pins[i].Project < d.Pins[j].Project })
-	if d.Version > LockfileVersion {
-		return Lock{}, fmt.Errorf("%s: lockfile_version %d, and this build understands %d — "+
-			"read it with a newer one rather than with this, which would miss whatever the "+
-			"bump was for", path, d.Version, LockfileVersion)
-	}
 	return d, nil
 }
 

@@ -1,6 +1,7 @@
 package bottle
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,6 +102,32 @@ func TestANewerLockfileVersionIsRefused(t *testing.T) {
 	d.Version = 1
 	if _, err := ParseLock([]byte(RenderLock(d)), "old.lock.hcl"); err != nil {
 		t.Errorf("an older lock was refused: %v", err)
+	}
+}
+
+// THE VERSION IS READ BEFORE THE CONTENTS, which is the whole point of
+// having one: it says "stop, you cannot interpret what follows" before this
+// build interprets it by its own rules.
+//
+// Checked last, as it was, a lock from a newer bk was first judged against
+// THIS build's expectations. A v2 that renamed or restructured `locked`
+// therefore came back as "this is not a lock" — false, and it sends the
+// reader hunting for a corrupt file instead of for a newer binary.
+//
+// The file below is exactly that case: a future version whose body this
+// build cannot make sense of. Both complaints are available; only one is
+// true.
+func TestAFutureVersionIsNamedBeforeItsBodyIsJudged(t *testing.T) {
+	src := fmt.Sprintf("lockfile_version = %d\nplatform = \"linux/x86-64\"\npins = { \"a.org\" = \"1.0\" }\n", LockfileVersion+1)
+	_, err := ParseLock([]byte(src), "future.lock.hcl")
+	if err == nil {
+		t.Fatal("a lock from the future was read as if understood")
+	}
+	if !strings.Contains(err.Error(), "lockfile_version") {
+		t.Errorf("the refusal does not name the version: %v", err)
+	}
+	if strings.Contains(err.Error(), "not a lock") {
+		t.Errorf("a lock from the future was called malformed: %v", err)
 	}
 }
 
