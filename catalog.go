@@ -73,10 +73,18 @@ type CatalogProject struct {
 	// their `bin/` prefix, sorted.
 	//
 	// Here because it is the only metadata in this pantry a search can
-	// work on. Measured on 1907 recipes: 1592 declare `provides` and
-	// SIX carry a summary. `nix search` and `guix search` look in the
-	// description, which is the right design for a collection that has
-	// descriptions; here it would find almost nothing.
+	// work on. Counted in the PUBLISHED catalogue of 2026-10-06, with
+	// `go run ./internal/catstat` in go-pkgx/pkgx, and the two platforms
+	// agree: of 1908 projects, 1582 declare `provides` — 4592 command
+	// names on linux/aarch64, 4498 on darwin/aarch64 — and SIX carry a
+	// summary. `nix search` and `guix search` look in the description,
+	// which is the right design for a collection that HAS descriptions;
+	// here it would find almost nothing.
+	//
+	// The figures carry their date and their instrument on purpose: an
+	// earlier revision of this comment said "1907 recipes, 1592 provides"
+	// with neither, and by the time anyone compared, both numbers had
+	// moved and nothing said whether the difference was drift or a defect.
 	//
 	// And it answers the question people actually arrive with. You know
 	// the command, not the package: `rg` is `crates.io/ripgrep`, which no
