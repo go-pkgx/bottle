@@ -283,3 +283,28 @@ func TestRecipeDocRefusesUnreadableHCL(t *testing.T) {
 		t.Errorf("the error must name the project: %v", err)
 	}
 }
+
+// AN ATTRIBUTE NAME IS UNTRUSTED, and we were the ones printing it raw.
+//
+// Found by FuzzParseLock in seven seconds, on `"\xe4\x040=0/0"`: the name
+// reached the terminal through our own `fmt.Errorf("hcl: %s: %s", name, …)`
+// before any field validation could run — a shorter path than the three
+// that had just been closed, because it needs nothing to be well formed.
+func TestAnAttributeNameCannotCarryAnEscape(t *testing.T) {
+	// Division by zero makes the ATTRIBUTE path fail (not the parse path),
+	// which is what puts the name in the message.
+	_, err := HCLToMap([]byte("a\x1b[2K\rb = 0/0\n"), "evil.hcl")
+	if err == nil {
+		t.Fatal("an invalid expression parsed")
+	}
+	for _, bad := range []rune{0x1b, '\r', 0x00, 0x7f} {
+		if strings.ContainsRune(err.Error(), bad) {
+			t.Errorf("%q reached the message: %q", bad, err.Error())
+		}
+	}
+	// The name is still RECOGNISABLE: cleaning is not censoring, and a
+	// reader needs to know which attribute was wrong.
+	if !strings.Contains(err.Error(), "ab") && !strings.Contains(err.Error(), "a") {
+		t.Errorf("the attribute was lost with the escapes: %q", err.Error())
+	}
+}
