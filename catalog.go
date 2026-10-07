@@ -214,17 +214,117 @@ func (c *Catalog) Complete(partial string) []Node {
 // transitive graph of anything interesting is pages long, and the first
 // level is what a person reads.
 func (c *Catalog) DepTree(project string, depth int) []DepNode {
-	index := map[string]CatalogProject{}
+	index := c.index()
+	edges := func(p string) []string { return index[p].Deps }
+	return walkGraph(index, edges, project, depth)
+}
+
+// Dependents is the SAME walk in the other direction: who needs this.
+//
+// # WHY THE OTHER DIRECTION IS A DIFFERENT QUESTION
+//
+// `ls --tree` answers "what does this need", which is what you ask before
+// installing something. "Who needs this" is what you ask before CHANGING
+// something, and no amount of descending answers it. Every comparable tool
+// has it, each with its own emphasis:
+//
+//   - `spack dependents [-t]`: direct, or transitive with -t.
+//   - `guix refresh --list-dependent`: what would need REBUILDING, and the
+//     manual says plainly that it only approximates that.
+//   - `nix why-depends A B`: not a list at all but a shortest PATH, which
+//     is a third question and is WhyDepends below.
+//
+// # WHAT IT COVERS, AND WHAT IT DOES NOT
+//
+// The catalogue's `deps` are RUNTIME dependencies, reduced for one
+// platform. So this is the runtime blast radius on THIS platform: who would
+// load different bytes if this project changed.
+//
+// It is NOT the rebuild set. A build dependency is paid once by the factory
+// and is not in anybody's installed closure, so it is not in the catalogue
+// and cannot be in this answer. Guix's command is about rebuilds and says
+// it approximates them; this one is about closures and is exact for what it
+// covers — saying which is better than implying the other.
+func (c *Catalog) Dependents(project string, depth int) []DepNode {
+	index := c.index()
+	rev := map[string][]string{}
+	for _, p := range c.Projects {
+		for _, d := range p.Deps {
+			rev[d] = append(rev[d], p.Project)
+		}
+	}
+	edges := func(p string) []string { return rev[p] }
+	return walkGraph(index, edges, project, depth)
+}
+
+// WhyDepends is the shortest path from `from` to `to` through runtime
+// dependencies, including both ends, or nil when there is none.
+//
+// Nix's question, and it is not answerable from either tree above: a reader
+// looking at a closure wants to know WHICH link put something there, and a
+// transitive list says it is there without saying why. Shortest because
+// that is the explanation a person can hold — `nix why-depends` makes the
+// same choice.
+//
+// Breadth-first, so the first path found is a shortest one. Ties are broken
+// by name, so two runs on one catalogue give the same answer; an
+// explanation that changes between runs is one nobody can quote.
+func (c *Catalog) WhyDepends(from, to string) []string {
+	index := c.index()
+	if from == to {
+		return []string{from}
+	}
+	prev := map[string]string{from: ""}
+	queue := []string{from}
+	for len(queue) > 0 {
+		p := queue[0]
+		queue = queue[1:]
+		kids := append([]string(nil), index[p].Deps...)
+		sort.Strings(kids)
+		for _, d := range kids {
+			if _, seen := prev[d]; seen {
+				continue
+			}
+			prev[d] = p
+			if d == to {
+				var path []string
+				for n := to; n != ""; n = prev[n] {
+					path = append(path, n)
+				}
+				for i, j := 0, len(path)-1; i < j; i, j = i+1, j-1 {
+					path[i], path[j] = path[j], path[i]
+				}
+				return path
+			}
+			queue = append(queue, d)
+		}
+	}
+	return nil
+}
+
+func (c *Catalog) index() map[string]CatalogProject {
+	index := make(map[string]CatalogProject, len(c.Projects))
 	for _, p := range c.Projects {
 		index[p.Project] = p
 	}
-	seen := map[string]bool{project: true}
+	return index
+}
+
+// walkGraph is the shared walk, because the hard part is the DAG marking
+// and one copy of a subtle thing is worth two of anything.
+//
+// `edges` is what hangs under a node: its dependencies going down, its
+// dependents going up. Everything else — the ordering, the repeat marking,
+// the depth bound, what a Known node is — is the same question in both
+// directions and was already answered once here.
+func walkGraph(index map[string]CatalogProject, edges func(string) []string, root string, depth int) []DepNode {
+	seen := map[string]bool{root: true}
 	var walk func(string, int) []DepNode
 	walk = func(p string, level int) []DepNode {
 		if depth > 0 && level >= depth {
 			return nil
 		}
-		kids := append([]string(nil), index[p].Deps...)
+		kids := append([]string(nil), edges(p)...)
 		sort.Strings(kids)
 
 		// THE WHOLE LEVEL IS MARKED BEFORE ANY OF IT IS DESCENDED INTO.
@@ -270,7 +370,7 @@ func (c *Catalog) DepTree(project string, depth int) []DepNode {
 		}
 		return out
 	}
-	return walk(project, 0)
+	return walk(root, 0)
 }
 
 // DepNode is one dependency, and what hangs under it.

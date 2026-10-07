@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -554,5 +555,132 @@ func TestOrdinaryPlatformsAreNotDropped(t *testing.T) {
 		if err := ValidatePlatformSlug(s); err != nil {
 			t.Errorf("ValidatePlatformSlug(%q) = %v", s, err)
 		}
+	}
+}
+
+// WHO NEEDS THIS — the question `ls --tree` cannot answer however deep it
+// goes, and the one you ask before CHANGING something rather than before
+// installing it.
+func TestDependentsWalksTheOtherWay(t *testing.T) {
+	c := fanCatalog()
+	got := names(c.Dependents("zlib.net", 1))
+	want := []string{"curl.se", "openssl.org"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("direct dependents = %v, want %v", got, want)
+	}
+	// Transitive: git needs curl needs zlib, so git is reached at depth 2
+	// and not at depth 1 — a bound that did nothing would show it at both.
+	deep := c.Dependents("zlib.net", 0)
+	if g := names(deep); !reflect.DeepEqual(g, want) {
+		t.Errorf("top level of the full walk = %v, want %v", g, want)
+	}
+	var under []string
+	for _, n := range deep {
+		if n.Project == "curl.se" {
+			under = names(n.Under)
+		}
+	}
+	if !reflect.DeepEqual(under, []string{"git-scm.org"}) {
+		t.Errorf("under curl.se = %v, want [git-scm.org]", under)
+	}
+}
+
+// A DAG, NOT A TREE, in this direction too: zlib is needed by curl AND by
+// openssl, and openssl is needed by curl. Whichever of the two occurrences
+// of a node is expanded, the other says so instead of repeating a subtree.
+func TestDependentsMarksRepeatsInsteadOfRepeatingThem(t *testing.T) {
+	c := fanCatalog()
+	deep := c.Dependents("zlib.net", 0)
+	expanded, repeated := 0, 0
+	var walk func([]DepNode)
+	walk = func(ns []DepNode) {
+		for _, n := range ns {
+			if n.Project == "curl.se" {
+				if n.Repeat {
+					repeated++
+				} else {
+					expanded++
+				}
+			}
+			walk(n.Under)
+		}
+	}
+	walk(deep)
+	if expanded != 1 || repeated != 1 {
+		t.Errorf("curl.se expanded %d time(s) and marked repeat %d time(s), want 1 and 1", expanded, repeated)
+	}
+}
+
+// A project nothing needs is not an error and not a mistake: most leaves of
+// a pantry are nobody's dependency.
+func TestDependentsOfALeafIsEmpty(t *testing.T) {
+	if got := fanCatalog().Dependents("git-scm.org", 0); len(got) != 0 {
+		t.Errorf("dependents of a leaf = %v", got)
+	}
+}
+
+// NIX'S QUESTION: not "what is in the closure" but WHICH LINK put it there.
+func TestWhyDependsIsAShortestPath(t *testing.T) {
+	c := fanCatalog()
+	// git → curl → zlib is length 3; git → curl → openssl → zlib is 4.
+	got := c.WhyDepends("git-scm.org", "zlib.net")
+	want := []string{"git-scm.org", "curl.se", "zlib.net"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("WhyDepends = %v, want the shortest %v", got, want)
+	}
+	// A project is trivially its own reason, which is the answer that keeps
+	// a caller from having to special-case it.
+	if got := c.WhyDepends("curl.se", "curl.se"); !reflect.DeepEqual(got, []string{"curl.se"}) {
+		t.Errorf("WhyDepends(x, x) = %v", got)
+	}
+	// NO PATH IS nil, not an empty slice dressed up as an answer, and not
+	// the reverse path by accident: zlib needs nothing.
+	if got := c.WhyDepends("zlib.net", "git-scm.org"); got != nil {
+		t.Errorf("WhyDepends found a path that does not exist: %v", got)
+	}
+}
+
+// fanCatalog: git → curl → {openssl, zlib}, openssl → zlib. A diamond, so
+// the repeat marking and the shortest path both have something to decide.
+func fanCatalog() *Catalog {
+	return &Catalog{Projects: []CatalogProject{
+		{Project: "git-scm.org", Versions: []string{"2.51.0"}, Deps: []string{"curl.se"}},
+		{Project: "curl.se", Versions: []string{"8.20"}, Deps: []string{"openssl.org", "zlib.net"}},
+		{Project: "openssl.org", Versions: []string{"4.0.2"}, Deps: []string{"zlib.net"}},
+		{Project: "zlib.net", Versions: []string{"1.3.2"}},
+	}}
+}
+
+func names(ns []DepNode) []string {
+	var out []string
+	for _, n := range ns {
+		out = append(out, n.Project)
+	}
+	return out
+}
+
+// SHORTEST, NOT FIRST FOUND — and the diamond above cannot tell the two
+// apart, which mutate proved by turning the breadth-first queue into a
+// stack and surviving it.
+//
+// Here `a` reaches `c` two ways: through `b` in two hops and through the
+// `z` chain in four. The long branch sorts LAST, so a stack pops it first
+// and walks it to the end; only a queue returns the short one. My first
+// attempt at this fixture put the long branch first and still passed under
+// the mutation — with a stack it is the LAST child enqueued that is
+// explored first, which is the opposite of the intuition.
+func TestWhyDependsPrefersTheShortPathOverTheOneItMeetsFirst(t *testing.T) {
+	c := &Catalog{Projects: []CatalogProject{
+		{Project: "a.org", Deps: []string{"b.org", "z0.org"}},
+		{Project: "b.org", Deps: []string{"c.org"}},
+		{Project: "z0.org", Deps: []string{"z1.org"}},
+		{Project: "z1.org", Deps: []string{"z2.org"}},
+		{Project: "z2.org", Deps: []string{"c.org"}},
+		{Project: "c.org"},
+	}}
+	got := c.WhyDepends("a.org", "c.org")
+	want := []string{"a.org", "b.org", "c.org"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("WhyDepends = %v (%d hops), want the shortest %v", got, len(got), want)
 	}
 }
