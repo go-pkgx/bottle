@@ -1,0 +1,79 @@
+# Fuzzing on a schedule, because a seed corpus is not fuzzing.
+#
+# `go test` runs a Fuzz target against its seeds and the committed corpus.
+# That is a regression suite — it re-runs what has already been found. The
+# SEARCH only happens under `-fuzz`, and the search is what found the defect
+# these targets exist for: a crafted attribute name reached a terminal
+# through our own error sentence, in SEVEN SECONDS, after three targeted
+# fixes had just been reviewed and merged.
+#
+# Not on every pull request: a two-minute search per target would add six
+# minutes to every push and would find the same things repeatedly. Weekly,
+# where it can run longer and where a NEW finding is the only reason it
+# speaks.
+#
+# ⛔ WHAT TO DO WHEN IT GOES RED. The failing input is printed in the log
+# and written to testdata/fuzz/<Target>/<hash> ON THE RUNNER, which is
+# discarded. Copy the `go test fuzz v1` block out of the log, commit it as
+# that file, and the regression suite carries it from then on. The artifact
+# below saves the same thing so a long literal does not have to be retyped
+# out of a log.
+
+name: fuzz
+
+on:
+  schedule:
+    # Monday 04:00 UTC, before the catalogue job in go-pkgx/packages so a
+    # finding here is on the screen before the week's publishing starts.
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: how long to search per target
+        default: 5m
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: search ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # One job per target rather than a loop, so a finding in one does
+        # not hide the others behind an early exit — and so the job NAME
+        # says which parser gave way.
+        target: [FuzzUnmarshalCatalog, FuzzParseLock, FuzzDisplayText]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      # ⛔ SAY WHICH TOOLCHAIN RAN. A corpus entry found under one compiler
+      # and not reproducible under another is a different investigation.
+      - run: go version
+      # ⛔ THE DISPATCH INPUT GOES THROUGH env, NOT INTO THE SCRIPT. A
+      # ${{ }} substitution is textual: it is pasted into the shell before
+      # the shell parses it, so an input of `5m'; curl … | sh; '` would run.
+      # Only someone with write access can dispatch this, which makes it a
+      # smaller hole and not a different one. Through env the value is a
+      # variable the shell never re-parses.
+      #
+      # matrix.target is a literal in this file and needs no such care, but
+      # it costs nothing to treat both the same way and it removes the
+      # question.
+      - name: search
+        env:
+          TARGET: ${{ matrix.target }}
+          FUZZTIME: ${{ inputs.fuzztime || '5m' }}
+        run: go test -run "^${TARGET}\$" -fuzz "^${TARGET}\$" -fuzztime "$FUZZTIME" .
+      - name: keep whatever it found
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: corpus-${{ matrix.target }}
+          path: testdata/fuzz/
+          if-no-files-found: ignore
