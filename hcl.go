@@ -3,6 +3,9 @@ package bottle
 import (
 	"fmt"
 	"math/big"
+	"reflect"
+	"sort"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -30,34 +33,50 @@ func HCLToYAML(src []byte, filename string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	out, err := yaml.Marshal(doc)
-	if err != nil {
-		// Unreachable: HCLToMap yields only string, bool, int64, float64, nil,
-		// []any and map[string]any, and yaml.Marshal renders all of them. Kept
-		// because the two can drift — a new cty case added above would arrive
-		// here first — and not faked into coverage, because a test of a copy
-		// of these three lines would agree with itself whatever they said.
-		return nil, err
-	}
-	// Read back what we just wrote.
+	// VERIFY, THEN RETRY — because every attempt to PREDICT which strings
+	// yaml.v3 mangles was wrong, twice.
 	//
-	// yaml.v3 can emit a block scalar it cannot itself re-read: a string whose
-	// first line is indented gets an explicit indentation indicator that does
-	// not match the body, and the document then fails with "did not find
-	// expected key". Demonstrated with no HCL involved at all —
-	// priver.dev/geni's package.yml does not survive
-	// yaml.Unmarshal → yaml.Marshal → yaml.Unmarshal.
+	// The comment this replaces said the cause was "a string whose first line
+	// is indented". Measured against yaml.v3, with no HCL involved:
 	//
-	// Upstream recipes never reach this path, so the defect is invisible
-	// there. An HCL recipe with the same shape would hand the caller YAML that
-	// silently fails to parse somewhere further along. Saying so here costs
-	// one decode and names the file.
-	var check any
-	if err := yaml.Unmarshal(out, &check); err != nil {
-		return nil, fmt.Errorf("hcl: %s: converts to YAML that cannot be read back (%w) — "+
-			"a string whose first line is indented is the known cause", filename, err)
+	//	"    first\nsecond\n"  round-trips fine   ← the stated cause does not fail
+	//	"\tfirst\nsecond\n"    cannot be read back
+	//	"\nsecond\n"           comes back as "second\n" — one line SHORTER
+	//
+	// The last is priver.dev/geni's `fixture: |`, which begins with a blank
+	// line: the one recipe in 1899 that `bk tohcl` refused. And it is the
+	// dangerous shape, because losing a leading blank line is not a parse
+	// error — a guard asking only "does it still parse" lets it through.
+	//
+	// A per-string probe replaced that rule and was ALSO wrong: the same
+	// string round-trips at the top of a document and not three levels down,
+	// so the outcome depends on nesting depth, which no probe of the string
+	// alone can see.
+	//
+	// So nothing here predicts. The document is marshalled, read back and
+	// COMPARED; if it changed, it is marshalled again with every multi-line
+	// string double-quoted, a style that carries any string there is. The
+	// second pass costs one extra marshal on the rare document that needs it
+	// and nothing on the rest, and it is right by construction rather than by
+	// a rule that has to be maintained against a library's quirks.
+	for _, quoteMultiline := range []bool{false, true} {
+		out, err := yaml.Marshal(yamlNodeFor(doc, quoteMultiline))
+		if err != nil {
+			// Unreachable: HCLToMap yields only string, bool, int64, float64,
+			// nil, []any and map[string]any. Kept because the two can drift —
+			// a new cty case added above would arrive here first.
+			return nil, err
+		}
+		var check any
+		if err := yaml.Unmarshal(out, &check); err != nil {
+			continue // the quoted pass will not have this problem
+		}
+		if sameDocument(doc, check) {
+			return out, nil
+		}
 	}
-	return out, nil
+	return nil, fmt.Errorf("hcl: %s: the YAML it converts to does not read back as the same document, "+
+		"even with every multi-line string quoted", filename)
 }
 
 // HCLToMap parses package.hcl into the generic document shape a package.yml
@@ -197,3 +216,88 @@ func hclDiag(prefix string, diags interface{ Error() string }) error {
 }
 
 const hclDiagLimit = 500
+
+// yamlNodeFor builds the YAML node tree for a document, so the STYLE of each
+// scalar is ours to choose rather than yaml.v3's.
+//
+// quoteMultiline is the second pass of HCLToYAML: with it, every string
+// containing a newline is written double-quoted, a style that carries any
+// string there is. It is not the default because this conversion feeds a
+// schema validator over the whole pantry, and restyling every script block
+// would turn a one-line change into a diff nobody can read.
+func yamlNodeFor(v any, quoteMultiline bool) *yaml.Node {
+	switch x := v.(type) {
+	case nil:
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: "null"}
+	case string:
+		n := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: x}
+		if quoteMultiline && strings.Contains(x, "\n") {
+			n.Style = yaml.DoubleQuotedStyle
+		}
+		return n
+	case bool:
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: fmt.Sprint(x)}
+	case int64:
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!int", Value: fmt.Sprint(x)}
+	case float64:
+		n := &yaml.Node{}
+		_ = n.Encode(x) // yaml.v3's own float formatting, not ours
+		return n
+	case []any:
+		n := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		for _, e := range x {
+			n.Content = append(n.Content, yamlNodeFor(e, quoteMultiline))
+		}
+		return n
+	case map[string]any:
+		n := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		// SORTED, because yaml.Marshal sorts a map's keys and this replaces
+		// it. Nothing downstream depends on the order — the schema validator
+		// reads the document, not the bytes — but this conversion is run over
+		// the whole pantry, and a reshuffle would make every change
+		// unreviewable.
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			n.Content = append(n.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: k},
+				yamlNodeFor(x[k], quoteMultiline))
+		}
+		return n
+	default:
+		// Unreachable from hclCtyToGo, which yields exactly the cases above.
+		// Encode rather than panic: a new cty case added upstream arrives
+		// here, and a wrong style is better than a crash in an installer.
+		n := &yaml.Node{}
+		_ = n.Encode(x)
+		return n
+	}
+}
+
+// looked for.
+func sameDocument(in map[string]any, out any) bool {
+	return reflect.DeepEqual(normNums(in), normNums(out))
+}
+
+func normNums(v any) any {
+	switch x := v.(type) {
+	case int64:
+		return int(x)
+	case []any:
+		o := make([]any, len(x))
+		for i, e := range x {
+			o[i] = normNums(e)
+		}
+		return o
+	case map[string]any:
+		o := make(map[string]any, len(x))
+		for k, e := range x {
+			o[k] = normNums(e)
+		}
+		return o
+	}
+	return v
+}
