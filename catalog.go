@@ -44,6 +44,15 @@ type Catalog struct {
 	// is rather than implying the registry was asked just now.
 	Generated string           `json:"generated"`
 	Projects  []CatalogProject `json:"projects"`
+	// Dropped counts version strings refused as unreadable while parsing,
+	// and is NOT part of the file: it describes this reading of it.
+	//
+	// It exists so the dropping is not silent. A guard that quietly
+	// removes things leaves a reader comparing a short list against their
+	// memory, so `pkgx catalog` prints this count when it is not zero —
+	// and on a catalogue our own factory published it should never be
+	// anything else.
+	Dropped int `json:"-"`
 }
 
 // CatalogProject is one project as the catalogue knows it.
@@ -349,6 +358,48 @@ func UnmarshalCatalog(b []byte) (Catalog, error) {
 		for j, cmd := range p.Provides {
 			p.Provides[j] = displayText(cmd, commandLimit)
 		}
+		// A VERSION IS NEITHER OF THOSE TWO CASES, and it took a probe to
+		// see it: `pkgx ls` printed a catalogue's versions RAW, so a
+		// version carrying ESC[2K and a carriage return rewrote its own
+		// line as a different, reassuring one. Measured:
+		//
+		//	evil.org   1.0.0^[[2K^Mcurl.se  8.20  verified by maintainers
+		//
+		// It is a KEY — it becomes a tag and a directory — so it cannot be
+		// cleaned and shown like a summary; a cleaned key would select
+		// something other than what it says.
+		//
+		// But it is NOT refused like a name either, and the asymmetry is
+		// deliberate. A version string reaches a published catalogue from
+		// an upstream recipe's `versions:` spec, resolved against GitHub's
+		// tags — content a recipe author controls. Refusing the whole
+		// catalogue would hand any one of them a switch that turns off
+		// `pkgx ls`, `search` and every <TAB> for everybody.
+		//
+		// So the unusable version is DROPPED and COUNTED. The project
+		// stays listed, which is the state the type already documents as
+		// legal: named by the pantry, nothing this client can fetch.
+		kept := p.Versions[:0]
+		for _, v := range p.Versions {
+			if ValidateVersionString(v) != nil {
+				c.Dropped++
+				continue
+			}
+			kept = append(kept, v)
+		}
+		p.Versions = kept
+		// Platforms get the same treatment for the same reason. Only one
+		// tool prints them today, which is exactly the argument people use
+		// for leaving a field unchecked until something new prints it.
+		plat := p.Platforms[:0]
+		for _, s := range p.Platforms {
+			if ValidatePlatformSlug(s) != nil {
+				c.Dropped++
+				continue
+			}
+			plat = append(plat, s)
+		}
+		p.Platforms = plat
 		for _, d := range p.Deps {
 			if err := ValidateProjectName(d); err != nil {
 				return Catalog{}, fmt.Errorf("catalog: %s declares %w", p.Project, err)

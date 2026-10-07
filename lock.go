@@ -176,7 +176,21 @@ func ParseLock(src []byte, path string) (Lock, error) {
 		if err := ValidateProjectName(proj); err != nil {
 			return Lock{}, fmt.Errorf("%s: %w", path, err)
 		}
-		d.Pins = append(d.Pins, LockPin{proj, lockString(e["version"]), lockString(e["spec"])})
+		// THE VERSION IS A KEY, not a caption: it selects the bytes to
+		// download and names the directory they go in. Refused rather than
+		// cleaned, unlike a catalogue summary — a version that is not
+		// version-shaped means somebody wanted something, and exactness is
+		// the entire point of a lock. See ValidateVersionString, which
+		// records the crafted version that wrote on a terminal through the
+		// unsatisfiable-pin message.
+		version, spec := lockString(e["version"]), lockString(e["spec"])
+		if err := ValidateVersionString(version); err != nil {
+			return Lock{}, fmt.Errorf("%s: %s: %w", path, proj, err)
+		}
+		if err := ValidateSpecHash(spec); err != nil {
+			return Lock{}, fmt.Errorf("%s: %s: %w", path, proj, err)
+		}
+		d.Pins = append(d.Pins, LockPin{proj, version, spec})
 	}
 	sort.Slice(d.Pins, func(i, j int) bool { return d.Pins[i].Project < d.Pins[j].Project })
 	return d, nil

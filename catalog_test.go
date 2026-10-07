@@ -472,3 +472,87 @@ func TestDepTreeTerminatesOnACycle(t *testing.T) {
 		t.Errorf("the cycle back to a.org is not marked as already shown: %+v", got[0].Under)
 	}
 }
+
+// A CATALOGUE'S VERSIONS REACH THE TERMINAL, and it took a probe to see it:
+// `pkgx ls` printed them raw, so a version carrying ESC[2K and a carriage
+// return rewrote its own line as a different, reassuring one.
+//
+//	evil.org   1.0.0^[[2K^Mcurl.se  8.20  ✓ verified by maintainers
+//
+// Dropped and counted rather than refused: a version string reaches a
+// published catalogue from an upstream recipe's `versions:` spec, so
+// refusing the whole file would hand any recipe author a switch that turns
+// off `pkgx ls`, `search` and every <TAB> for everybody.
+func TestACraftedVersionIsDroppedFromACatalogueNotShown(t *testing.T) {
+	body := `{"generated":"2026-10-07T00:00:00Z","projects":[` +
+		`{"project":"evil.org","versions":["1.0.0\u001b[2K\rcurl.se 8.20 verified","2.0.0"],` +
+		`"platforms":["darwin/aarch64"]}]}`
+	c, err := UnmarshalCatalog([]byte(body))
+	if err != nil {
+		t.Fatalf("the catalogue was refused outright: %v", err)
+	}
+	p := c.Projects[0]
+	for _, v := range p.Versions {
+		if strings.ContainsRune(v, 0x1b) {
+			t.Errorf("an escape reached a version: %q", v)
+		}
+	}
+	// The GOOD version survives. A guard that threw away the whole list
+	// would be a denial of service wearing a fix's clothes.
+	if len(p.Versions) != 1 || p.Versions[0] != "2.0.0" {
+		t.Errorf("versions = %q, want just the readable one", p.Versions)
+	}
+	// AND IT IS NOT SILENT. A guard that quietly removes things leaves a
+	// reader comparing a short list against their memory.
+	if c.Dropped != 1 {
+		t.Errorf("Dropped = %d, want 1", c.Dropped)
+	}
+	// The project stays LISTED, which is the state the type already
+	// documents as legal: named by the pantry, nothing this client can
+	// fetch.
+	if p.Project != "evil.org" {
+		t.Errorf("the project was removed with its version: %q", p.Project)
+	}
+}
+
+// AND A REAL CATALOGUE LOSES NOTHING. The published catalogues of
+// 2026-10-06 carry 2801 version strings over fifteen distinct runes; if any
+// of them tripped this, `pkgx ls` would start hiding versions that work.
+func TestOrdinaryVersionsAreNotDropped(t *testing.T) {
+	body := `{"generated":"2026-10-07T00:00:00Z","projects":[` +
+		`{"project":"min.io","versions":["2023.10.25.06.33.25","1.3.2","20260526.0","2026.1","1.2.3-rc1"]}]}`
+	c, err := UnmarshalCatalog([]byte(body))
+	if err != nil {
+		t.Fatalf("UnmarshalCatalog: %v", err)
+	}
+	if c.Dropped != 0 || len(c.Projects[0].Versions) != 5 {
+		t.Errorf("dropped %d, kept %q", c.Dropped, c.Projects[0].Versions)
+	}
+}
+
+// A PLATFORM IS A KEY TOO, and only one tool prints it today — which is
+// exactly the argument for leaving a field unchecked until something new
+// prints it.
+func TestACraftedPlatformIsDropped(t *testing.T) {
+	body := `{"generated":"2026-10-07T00:00:00Z","projects":[` +
+		`{"project":"evil.org","platforms":["darwin/aarch64","linux\u001b[2K\r/aarch64","notaslash","a/b/c","/x","y/"]}]}`
+	c, err := UnmarshalCatalog([]byte(body))
+	if err != nil {
+		t.Fatalf("the catalogue was refused outright: %v", err)
+	}
+	got := c.Projects[0].Platforms
+	if len(got) != 1 || got[0] != "darwin/aarch64" {
+		t.Errorf("platforms = %q, want just the readable one", got)
+	}
+	if c.Dropped != 5 {
+		t.Errorf("Dropped = %d, want 5", c.Dropped)
+	}
+}
+
+func TestOrdinaryPlatformsAreNotDropped(t *testing.T) {
+	for _, s := range []string{"linux/aarch64", "darwin/aarch64", "windows/x86-64", "linux/x86-64", "linux/s390x", "linux/loong64"} {
+		if err := ValidatePlatformSlug(s); err != nil {
+			t.Errorf("ValidatePlatformSlug(%q) = %v", s, err)
+		}
+	}
+}

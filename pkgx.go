@@ -862,6 +862,20 @@ func selectVersions(tags []string, wantFlavor string) []Ver {
 // look non-empty so the upstream-dist fallback never engaged for a project we
 // had published only some versions of.
 func isVersionTag(tag string) bool {
+	// THE SHAPE, not just the first byte. A tag list is what a registry
+	// says, and a registry is a configured endpoint — PKGX_DIST and the
+	// mirror can both be pointed elsewhere. A tag beginning with a digit
+	// and continuing into an escape sequence passed the first-byte test
+	// and went on to be printed in version lists.
+	//
+	// This keeps ONE invariant instead of a judgement per channel: no
+	// version string from anywhere — lock, catalogue or registry — reaches
+	// a terminal unvalidated. The allowlist admits `v1.2.3` and the
+	// `1.0.0+glibc2.28` flavour spelling; real tags are these plus the
+	// `sha256-…` referrer tags, which fail on the first byte as before.
+	if ValidateVersionString(tag) != nil {
+		return false
+	}
 	s := strings.TrimPrefix(strings.TrimPrefix(tag, "v"), "V")
 	return s != "" && s[0] >= '0' && s[0] <= '9'
 }
@@ -1487,7 +1501,14 @@ func closureErr(project string, constraints, askedBy []string, err error) error 
 		// demand is somebody's mistake, and naming them is the difference
 		// between a report and a search.
 		if len(constraints) == 1 && len(askedBy) == 1 && askedBy[0] != "" {
-			return fmt.Errorf("%w; asked for by %s (%s)", err, constraints[0], askedBy[0])
+			// THROUGH displayText, because a constraint can come from a
+			// lock or from a recipe's dependency line — content a third
+			// party writes — and this sentence is printed to a terminal.
+			// A crafted version turned it into a different, reassuring
+			// line; see ValidateVersionString. The lock is refused at
+			// parse time now, and this is the channel closed behind it.
+			return fmt.Errorf("%w; asked for by %s (%s)", err,
+				displayText(constraints[0], maxVersionString+8), displayText(askedBy[0], maxProjectName))
 		}
 		return err
 	}
@@ -1512,7 +1533,10 @@ type ConflictError struct {
 func (e *ConflictError) Error() string {
 	parts := make([]string, len(e.Constraints))
 	for i := range e.Constraints {
-		parts[i] = fmt.Sprintf("%s (%s)", e.Constraints[i], e.AskedBy[i])
+		// Same reason as the single-demand sentence above: these strings
+		// come from locks and recipes, and this one reaches a terminal.
+		parts[i] = fmt.Sprintf("%s (%s)",
+			displayText(e.Constraints[i], maxVersionString+8), displayText(e.AskedBy[i], maxProjectName))
 	}
 	return fmt.Sprintf("%v; asked for by %s", e.Err, strings.Join(parts, ", "))
 }
