@@ -184,3 +184,29 @@ func TestTheUnsatisfiableMessageCannotCarryAnEscape(t *testing.T) {
 		t.Errorf("the demands were lost with the escapes: %q", got)
 	}
 }
+
+// A REGISTRY IS A CONFIGURED ENDPOINT. PKGX_DIST and the mirror can both be
+// pointed elsewhere, and a tag list is whatever the far side says. The old
+// test was on the FIRST BYTE only, so a tag beginning with a digit and
+// continuing into an escape sequence passed and went on to be printed in
+// version lists.
+func TestARegistryTagIsHeldToTheVersionShape(t *testing.T) {
+	for _, tag := range []string{"1.3.2", "v9.1.0", "1.0.0+glibc2.28", "20260526.0", "V2.1"} {
+		if !isVersionTag(tag) {
+			t.Errorf("isVersionTag(%q) = false, want true", tag)
+		}
+	}
+	for _, tag := range []string{
+		"1.3.2\x1b[2K\rzlib.net 1.9.9 verified",
+		"1.0 and a sentence",
+		"1.0.0\n2.0.0",
+		// Still excluded for the original reason, which must not regress:
+		// the referrer tags a real registry carries beside the versions.
+		"sha256-21c9e22167bb8b188809b78e730a03df58aa4c657648f614aa52eaa4be5851c9",
+		"latest",
+	} {
+		if isVersionTag(tag) {
+			t.Errorf("isVersionTag(%q) = true, want false", tag)
+		}
+	}
+}

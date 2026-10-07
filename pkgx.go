@@ -862,6 +862,20 @@ func selectVersions(tags []string, wantFlavor string) []Ver {
 // look non-empty so the upstream-dist fallback never engaged for a project we
 // had published only some versions of.
 func isVersionTag(tag string) bool {
+	// THE SHAPE, not just the first byte. A tag list is what a registry
+	// says, and a registry is a configured endpoint — PKGX_DIST and the
+	// mirror can both be pointed elsewhere. A tag beginning with a digit
+	// and continuing into an escape sequence passed the first-byte test
+	// and went on to be printed in version lists.
+	//
+	// This keeps ONE invariant instead of a judgement per channel: no
+	// version string from anywhere — lock, catalogue or registry — reaches
+	// a terminal unvalidated. The allowlist admits `v1.2.3` and the
+	// `1.0.0+glibc2.28` flavour spelling; real tags are these plus the
+	// `sha256-…` referrer tags, which fail on the first byte as before.
+	if ValidateVersionString(tag) != nil {
+		return false
+	}
 	s := strings.TrimPrefix(strings.TrimPrefix(tag, "v"), "V")
 	return s != "" && s[0] >= '0' && s[0] <= '9'
 }
