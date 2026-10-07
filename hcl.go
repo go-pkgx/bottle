@@ -65,7 +65,7 @@ func HCLToYAML(src []byte, filename string) ([]byte, error) {
 func HCLToMap(src []byte, filename string) (map[string]any, error) {
 	f, diags := hclsyntax.ParseConfig(src, filename, hcl.InitialPos)
 	if diags.HasErrors() {
-		return nil, fmt.Errorf("hcl: parse: %s", diags.Error())
+		return nil, hclDiag("hcl: parse", diags)
 	}
 	return hclBodyToMap(f.Body.(*hclsyntax.Body))
 }
@@ -76,7 +76,7 @@ func hclBodyToMap(body *hclsyntax.Body) (map[string]any, error) {
 	for name, attr := range body.Attributes {
 		v, diags := attr.Expr.Value(recipeEvalContext())
 		if diags.HasErrors() {
-			return nil, fmt.Errorf("hcl: %s: %s", name, diags.Error())
+			return nil, hclDiag("hcl: "+displayText(name, maxProjectName), diags)
 		}
 		g, err := hclCtyToGo(v)
 		if err != nil {
@@ -162,3 +162,38 @@ func hclCtyToGo(v cty.Value) (any, error) {
 		return nil, fmt.Errorf("unsupported HCL value type %s", t.FriendlyName())
 	}
 }
+
+// hclDiag renders a diagnostic as something SAFE TO PRINT.
+//
+// # FOUND BY FUZZING, IN SEVEN SECONDS, AND IT WAS OUR OWN SENTENCE
+//
+// Three channels were closed so that no version string reaches a terminal
+// unvalidated — a lock, a catalogue, a registry tag. A REFUSAL was not one
+// of them, and it is the path taken before any of that validation can run:
+//
+//	hcl: \xe4\x040: fuzz.lock.hcl:1,5-8: Operation failed; …
+//
+// The control bytes are the ATTRIBUTE NAME, and we interpolated it
+// ourselves with `fmt.Errorf("hcl: %s: %s", name, …)`. A lock that does not
+// even hold a valid attribute could still write on the screen of whoever
+// ran it — a shorter path than the one that was fixed, since it needs
+// nothing to be well formed. The name is cleaned at each call site, which
+// is where it is known to be untrusted.
+//
+// Probed afterwards and worth stating: HCL's own parse diagnostics did NOT
+// quote raw source in any of twelve crafted inputs. Wrapping them here is
+// therefore defence in depth against a future version that does, not a
+// reproduced defect — said plainly, because a comment that claims a fix for
+// something nobody demonstrated is how an unverified belief becomes
+// documentation.
+//
+// The text goes through the same displayText a summary does: a message is
+// prose for a reader, not a key, so it is cleaned rather than refused. The
+// limit is generous because a diagnostic names a file, a position and a
+// cause, and losing the cause would trade one unreadable message for
+// another.
+func hclDiag(prefix string, diags interface{ Error() string }) error {
+	return fmt.Errorf("%s: %s", prefix, displayText(diags.Error(), hclDiagLimit))
+}
+
+const hclDiagLimit = 500
