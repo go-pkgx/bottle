@@ -388,6 +388,18 @@ func UnmarshalCatalog(b []byte) (Catalog, error) {
 			kept = append(kept, v)
 		}
 		p.Versions = kept
+		// Platforms get the same treatment for the same reason. Only one
+		// tool prints them today, which is exactly the argument people use
+		// for leaving a field unchecked until something new prints it.
+		plat := p.Platforms[:0]
+		for _, s := range p.Platforms {
+			if ValidatePlatformSlug(s) != nil {
+				c.Dropped++
+				continue
+			}
+			plat = append(plat, s)
+		}
+		p.Platforms = plat
 		for _, d := range p.Deps {
 			if err := ValidateProjectName(d); err != nil {
 				return Catalog{}, fmt.Errorf("catalog: %s declares %w", p.Project, err)

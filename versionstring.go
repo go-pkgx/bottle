@@ -116,3 +116,43 @@ func ValidateSpecHash(s string) error {
 // maxSpecString bounds a digest with room for a longer algorithm than
 // sha256 without inviting a paragraph.
 const maxSpecString = 128
+
+// ValidatePlatformSlug refuses anything that is not an `os/arch` slug.
+//
+// A platform is written by the factory, not by a recipe, so a bad one means
+// the file was forged rather than that somebody upstream was careless. It
+// is still only dropped, not fatal: the asymmetry that matters is between
+// a KEY and a CAPTION, and a reader who loses one platform line keeps a
+// usable catalogue.
+//
+// Exactly one tool prints these today — which is precisely the argument
+// people use for leaving a field unchecked until something new prints it.
+func ValidatePlatformSlug(s string) error {
+	if s == "" {
+		return fmt.Errorf("%w: empty", ErrBadVersionString)
+	}
+	if len(s) > maxPlatformSlug {
+		return fmt.Errorf("%w: %d bytes, limit %d", ErrBadVersionString, len(s), maxPlatformSlug)
+	}
+	slashes := 0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= '0' && c <= '9',
+			c >= 'a' && c <= 'z',
+			c == '.', c == '-', c == '_':
+		case c == '/':
+			slashes++
+		default:
+			return fmt.Errorf("%w: %q at byte %d", ErrBadVersionString, string(c), i)
+		}
+	}
+	if slashes != 1 || s[0] == '/' || s[len(s)-1] == '/' {
+		return fmt.Errorf("%w: %q is not os/arch", ErrBadVersionString, displayText(s, maxPlatformSlug))
+	}
+	return nil
+}
+
+// maxPlatformSlug bounds an os/arch pair; the longest in use is
+// `windows/x86-64`.
+const maxPlatformSlug = 32

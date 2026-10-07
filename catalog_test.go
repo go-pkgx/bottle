@@ -529,3 +529,30 @@ func TestOrdinaryVersionsAreNotDropped(t *testing.T) {
 		t.Errorf("dropped %d, kept %q", c.Dropped, c.Projects[0].Versions)
 	}
 }
+
+// A PLATFORM IS A KEY TOO, and only one tool prints it today — which is
+// exactly the argument for leaving a field unchecked until something new
+// prints it.
+func TestACraftedPlatformIsDropped(t *testing.T) {
+	body := `{"generated":"2026-10-07T00:00:00Z","projects":[` +
+		`{"project":"evil.org","platforms":["darwin/aarch64","linux\u001b[2K\r/aarch64","notaslash","a/b/c","/x","y/"]}]}`
+	c, err := UnmarshalCatalog([]byte(body))
+	if err != nil {
+		t.Fatalf("the catalogue was refused outright: %v", err)
+	}
+	got := c.Projects[0].Platforms
+	if len(got) != 1 || got[0] != "darwin/aarch64" {
+		t.Errorf("platforms = %q, want just the readable one", got)
+	}
+	if c.Dropped != 5 {
+		t.Errorf("Dropped = %d, want 5", c.Dropped)
+	}
+}
+
+func TestOrdinaryPlatformsAreNotDropped(t *testing.T) {
+	for _, s := range []string{"linux/aarch64", "darwin/aarch64", "windows/x86-64", "linux/x86-64", "linux/s390x", "linux/loong64"} {
+		if err := ValidatePlatformSlug(s); err != nil {
+			t.Errorf("ValidatePlatformSlug(%q) = %v", s, err)
+		}
+	}
+}
