@@ -684,3 +684,102 @@ func TestWhyDependsPrefersTheShortPathOverTheOneItMeetsFirst(t *testing.T) {
 		t.Errorf("WhyDepends = %v (%d hops), want the shortest %v", got, len(got), want)
 	}
 }
+
+// A CATALOGUE IS UNTRUSTED INPUT, AND A CYCLE IS A HANG WAITING TO HAPPEN.
+//
+// `deps` comes from recipes; nothing refuses a cycle when the catalogue is
+// built, and nothing could cheaply — a→b→a is only visible with the whole
+// graph in hand. All three terminate today, because `seen` and `prev` mark
+// before descending.
+//
+// This does NOT replace TestDepTreeTerminatesOnACycle above, and neither
+// covers the other:
+//
+//   - that one asserts the CONTENT — the back edge is marked Repeat — on
+//     DepTree alone, and has no timeout, so a regression to infinite
+//     recursion would hang it rather than fail it;
+//   - this one asserts TERMINATION, under a clock, for all three — and
+//     Dependents and WhyDepends are new, so nothing covered them at all.
+//
+// ⛔ THE TIMEOUT CATCHES ONE OF THE TWO FAILURE MODES, AND SAYING WHICH IS
+// THE POINT. Both were measured by breaking the code on purpose:
+//
+//	WhyDepends without its visited set   → a real infinite loop. The
+//	                                       timeout fires and names the
+//	                                       function and the cycle. ✅
+//	walkGraph without `seen`             → unbounded RECURSION, which
+//	                                       stack-overflows in well under
+//	                                       five seconds:
+//	                                           fatal error: stack overflow
+//	                                       A runtime fatal error kills the
+//	                                       process; no timeout in any test
+//	                                       can intercept it.
+//
+// So this is load-bearing for the breadth-first search and belt-and-braces
+// for the recursive walkers, where the failure is loud anyway. Claiming it
+// covered all three would have been claiming a guard nobody demonstrated.
+func TestTheGraphWalkersTerminateOnACycle(t *testing.T) {
+	for name, c := range map[string]*Catalog{
+		"a → b → a": {Projects: []CatalogProject{
+			{Project: "a.org", Deps: []string{"b.org"}},
+			{Project: "b.org", Deps: []string{"a.org"}},
+		}},
+		"a → a": {Projects: []CatalogProject{
+			{Project: "a.org", Deps: []string{"a.org"}},
+		}},
+		"a → b → c → a": {Projects: []CatalogProject{
+			{Project: "a.org", Deps: []string{"b.org"}},
+			{Project: "b.org", Deps: []string{"c.org"}},
+			{Project: "c.org", Deps: []string{"a.org"}},
+		}},
+	} {
+		for call, f := range map[string]func(){
+			"DepTree":    func() { c.DepTree("a.org", 0) },
+			"Dependents": func() { c.Dependents("a.org", 0) },
+			"WhyDepends": func() { c.WhyDepends("a.org", "c.org") },
+		} {
+			done := make(chan struct{})
+			go func() { defer close(done); f() }()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("%s did not return on the cycle %q — an installer would freeze here", call, name)
+			}
+		}
+	}
+}
+
+// AND THE PATH IT FINDS THROUGH A CYCLE IS STILL A PATH: every consecutive
+// pair is a real edge, and no project appears twice. A search that
+// terminated by giving up would also pass the test above.
+func TestWhyDependsThroughACycleIsAValidPath(t *testing.T) {
+	c := &Catalog{Projects: []CatalogProject{
+		{Project: "a.org", Deps: []string{"b.org"}},
+		{Project: "b.org", Deps: []string{"c.org"}},
+		{Project: "c.org", Deps: []string{"a.org"}},
+	}}
+	path := c.WhyDepends("a.org", "c.org")
+	if !reflect.DeepEqual(path, []string{"a.org", "b.org", "c.org"}) {
+		t.Fatalf("path = %v", path)
+	}
+	index := c.index()
+	seen := map[string]bool{}
+	for i, p := range path {
+		if seen[p] {
+			t.Errorf("%s appears twice in %v", p, path)
+		}
+		seen[p] = true
+		if i == 0 {
+			continue
+		}
+		var edge bool
+		for _, d := range index[path[i-1]].Deps {
+			if d == p {
+				edge = true
+			}
+		}
+		if !edge {
+			t.Errorf("%s → %s is not an edge", path[i-1], p)
+		}
+	}
+}
