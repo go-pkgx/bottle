@@ -62,6 +62,24 @@ type CatalogProject struct {
 	// means "named by the pantry, nothing published" — which is the honest
 	// answer for most of a pantry on most architectures, and is different
 	// from the project not existing.
+	//
+	// ⛔ IN PRACTICE THE PUBLISHED CATALOGUE CARRIES EXACTLY ONE, and a
+	// reader writing against this field needs to know that before they
+	// build on the plural.
+	//
+	// `bk catalog --versions` writes `[]string{v}` — the newest version
+	// THIS platform really carries, probed newest-first and stopped at the
+	// first hit, because the newest tag is not published for every
+	// architecture and the ordinary case then costs one request per project
+	// instead of N. Counted 2026-10-08 on the three catalogues published
+	// 2026-10-06: 1430, 1371 and 1369 entries, and **not one** of them has
+	// a second version.
+	//
+	// So this answers "what would I get" and not "what can I choose from".
+	// The second question goes to PublishedTagFor against the registry —
+	// which is also why a catalogue cannot be used to decide whether some
+	// OLDER version is installable here, a mistake this field's plural
+	// invites.
 	Versions []string `json:"versions,omitempty"`
 	// Platforms as `os/arch`, sorted. Also legal empty, for the same reason.
 	Platforms []string `json:"platforms,omitempty"`
