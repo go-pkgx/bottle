@@ -42,6 +42,28 @@ func TestTheLockHeaderNamesCommandsThatExist(t *testing.T) {
 		}
 	}
 
+	// ⛔ AND IT PROMISED BOTH USES WHEN IT CAN ONLY DELIVER ONE. The header
+	// said "`pkgx --lock <this file>` runs exactly these versions, and
+	// `bk factory --lock <this file>` builds them" — flatly, for every lock.
+	//
+	// Measured 2026-10-08, by generating a real lock and running it: a fresh
+	// lock of curl.se for linux/aarch64 pinned curl.se/ca-certs 2026.09.25
+	// and openssl.org 4.0.3, neither of which the factory had published, and
+	// `pkgx --lock` refused the file. A lock pins what the RECIPES can build,
+	// which runs ahead of what has been built; the two uses are not the same
+	// question and the header must not merge them.
+	if strings.Contains(out, "runs exactly these versions, and") {
+		t.Error("the header still promises pkgx --lock unconditionally")
+	}
+	for _, needed := range []string{
+		"PUBLISHED", // the condition under which pkgx --lock works
+		"-runnable", // and what to do when it does not
+	} {
+		if !strings.Contains(out, needed) {
+			t.Errorf("the header does not mention %q", needed)
+		}
+	}
+
 	// The header is a comment, so every line of it must be one: a line
 	// that lost its `#` would be parsed as HCL and refuse the whole file.
 	for _, line := range strings.Split(out, "\n") {
