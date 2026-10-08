@@ -18,7 +18,7 @@ import (
 //	}
 //
 //	$ pkgx --lock esc.lock.hcl true | cat -v
-//	pkgx: no version of zlib.net satisfies "=1.3.2\x1b[2K\r…" (available: 2);
+//	pkgx: no version of zlib.net satisfies "=1.3.2\x1b[2K\r…" (available: …);
 //	  asked for by =1.3.2^[[2K^Mzlib.net  1.9.9  ✓ verified (requested)
 //
 // The first half is %q-quoted and harmless. The second is not, and on a

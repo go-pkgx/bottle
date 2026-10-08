@@ -942,10 +942,44 @@ func PickVersionForAll(project string, constraints []string, osn, arch string) (
 		return vs[i], nil
 	}
 	if len(absent) > 0 {
-		return Ver{}, fmt.Errorf("no version of %s satisfies %s AND is published for %s/%s (available: %d; satisfy but not published here: %s)",
-			project, quoteAll(constraints), osn, arch, len(vs), strings.Join(absent, " "))
+		return Ver{}, fmt.Errorf("no version of %s satisfies %s AND is published for %s/%s (available: %s; satisfy but not published here: %s)",
+			project, quoteAll(constraints), osn, arch, availableVersions(vs), strings.Join(absent, " "))
 	}
-	return Ver{}, fmt.Errorf("no version of %s satisfies %s (available: %d)", project, quoteAll(constraints), len(vs))
+	return Ver{}, fmt.Errorf("no version of %s satisfies %s (available: %s)", project, quoteAll(constraints), availableVersions(vs))
+}
+
+// availableVersions renders what the reader could have asked for instead.
+//
+// ⛔ A COUNT IS NOT AN ANSWER, AND THIS ONE READS AS A VERSION. The message
+// used to end "(available: 1)". Measured 2026-10-08 on myself, seconds after
+// writing it:
+//
+//	$ pkgm pin stedolan.github.io/jq@1.7.1
+//	pkgm: no version of stedolan.github.io/jq satisfies "=1.7.1" (available: 1)
+//
+// Beside "=1.7.1", "available: 1" reads as a claim about version 1 — and I
+// went looking for the wrong thing. A count also withholds the single fact
+// that would end the problem: WHICH versions exist. nix, guix and spack all
+// list the candidates when a constraint cannot be met.
+//
+// Newest first, because that is what somebody retyping a constraint reaches
+// for, and capped because a project can carry hundreds. Every version here
+// has already passed ValidateVersionString on the way in (see isVersionTag),
+// which is what makes printing them safe.
+func availableVersions(vs []Ver) string {
+	if len(vs) == 0 {
+		return "none"
+	}
+	const show = 6
+	var out []string
+	for i := len(vs) - 1; i >= 0 && len(out) < show; i-- {
+		out = append(out, vs[i].Raw)
+	}
+	s := strings.Join(out, " ")
+	if len(vs) > show {
+		s = fmt.Sprintf("%s … (%d in all)", s, len(vs))
+	}
+	return s
 }
 
 // satisfiesAll reports whether v meets EVERY constraint. An empty set is met by
@@ -988,7 +1022,7 @@ func quoteAll(constraints []string) string {
 // sitting under the other tag:
 //
 //	resolve deps: no version of gnu.org/tar satisfies "*" AND is published
-//	for linux/x86-64 (available: 1; satisfy but not published here: 1.35.0)
+//	for linux/x86-64 (available: …; satisfy but not published here: 1.35.0)
 func publishedTagFor(project string, v Ver, osn, arch string) (string, bool, error) {
 	c, err := ociClientForDist()
 	if err != nil {
@@ -1495,7 +1529,7 @@ func closureErr(project string, constraints, askedBy []string, err error) error 
 		// But it still has an AUTHOR, and losing it is expensive in exactly
 		// the case where it matters most. Measured on libvips.org:
 		//
-		//   no version of ijg.org satisfies "9.6" (available: 2)
+		//   no version of ijg.org satisfies "9.6" (available: …)
 		//
 		// which says a demand is wrong and not whose. A single unsatisfiable
 		// demand is somebody's mistake, and naming them is the difference
