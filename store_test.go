@@ -165,3 +165,74 @@ func TestScanStoreOfAnAbsentDirectory(t *testing.T) {
 		t.Error("an absent store returned no error")
 	}
 }
+
+// LIVE AND DEAD AGAINST NAMED ROOTS — guix's rule, with a lock as the root
+// set: "any file reachable from a root is live; any other is dead".
+//
+// A lock pins the whole CLOSURE and not only what the person typed, which
+// is why membership in it needs no graph walk and no network.
+func TestLiveFromLocks(t *testing.T) {
+	entries, err := ScanStore(storeFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock := Lock{Pins: []LockPin{
+		{Project: "llvm.org", Version: "22.1.8"},
+		{Project: "gnu.org/bash", Version: "5.3"},
+	}}
+	live, dead := LiveFromLocks(entries, []Lock{lock})
+
+	got := map[string]bool{}
+	for _, e := range live {
+		got[e.Project+"@"+e.Version] = true
+	}
+	if len(live) != 2 || !got["llvm.org@22.1.8"] || !got["gnu.org/bash@5.3"] {
+		t.Errorf("live = %v, want exactly the two pinned", got)
+	}
+	// AND THE VERSION MATTERS, not just the project: llvm 16.0.6 is in the
+	// store and not in the lock, so it is dead even though llvm.org is
+	// rooted. A membership test on the project alone would call it live.
+	deadKeys := map[string]bool{}
+	for _, e := range dead {
+		deadKeys[e.Project+"@"+e.Version] = true
+	}
+	if !deadKeys["llvm.org@16.0.6"] {
+		t.Errorf("an unpinned VERSION of a rooted project was called live: %v", deadKeys)
+	}
+	if !deadKeys["gnu.org/bash@5.10"] {
+		t.Errorf("dead = %v, want bash 5.10 in it", deadKeys)
+	}
+	if len(live)+len(dead) != len(entries) {
+		t.Errorf("%d live + %d dead ≠ %d entries — something was lost", len(live), len(dead), len(entries))
+	}
+}
+
+// NO ROOTS MEANS EVERYTHING IS DEAD, and that is the correct answer rather
+// than a special case: "nothing is reachable from nothing". The caller
+// decides whether to ask the question that way; the library does not guess
+// a root set on their behalf.
+func TestLiveFromNoLocksIsAllDead(t *testing.T) {
+	entries, err := ScanStore(storeFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, dead := LiveFromLocks(entries, nil)
+	if len(live) != 0 || len(dead) != len(entries) {
+		t.Errorf("%d live, %d dead, want 0 and %d", len(live), len(dead), len(entries))
+	}
+}
+
+// SEVERAL ROOTS UNION, because that is what "reachable from any of them"
+// means — and a reader with two locks has two things they need kept.
+func TestLiveFromSeveralLocksIsTheUnion(t *testing.T) {
+	entries, err := ScanStore(storeFixture(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := Lock{Pins: []LockPin{{Project: "llvm.org", Version: "22.1.8"}}}
+	b := Lock{Pins: []LockPin{{Project: "llvm.org", Version: "16.0.6"}}}
+	live, _ := LiveFromLocks(entries, []Lock{a, b})
+	if len(live) != 2 {
+		t.Errorf("%d live, want both llvm versions — the union, not the last one", len(live))
+	}
+}
