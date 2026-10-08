@@ -172,3 +172,47 @@ func StoreTotals(entries []StoreEntry) (bytes int64, versions, projects int, old
 	}
 	return bytes, versions, len(seen), olderBytes
 }
+
+// LIVE AND DEAD, against roots the caller names.
+//
+// # WHY A LOCK IS THE ROOT, AND WHY THAT MAKES THIS EXACT
+//
+// guix's rule is the one to copy: "any file under /gnu/store reachable from
+// a root is considered live and cannot be deleted; any other file is
+// considered dead". The roots are explicit — symlinks under
+// /var/guix/gcroots, the user's profiles — and `guix gc --list-live`
+// reports before `guix gc` removes.
+//
+// There is no profile here, which is why ScanStore reports and nothing
+// deletes. But a LOCK is a root set already: it pins every project in the
+// closure, not only the roots the person typed, which is the whole reason
+// `pkgx --lock` exists. So reachability needs no graph walk and no network
+// — membership in the lock IS the closure.
+//
+// An ENVIRONMENT would not do: it names constraints, which have to be
+// resolved against the registry, and that is a network call this cannot
+// make. Saying which of the two is usable here is better than offering both
+// and failing on one.
+//
+// # IT STILL DELETES NOTHING, AND THE WORDING SAYS WHOSE ROOTS
+//
+// "Dead" here means "not reachable from the roots you named" — not
+// "garbage". Name a different lock and a different half of the store is
+// dead. The caller holds that judgement, and the report has to hand it back
+// rather than imply the store has an opinion.
+func LiveFromLocks(entries []StoreEntry, locks []Lock) (live, dead []StoreEntry) {
+	rooted := map[string]bool{}
+	for _, l := range locks {
+		for _, p := range l.Pins {
+			rooted[p.Project+"@"+p.Version] = true
+		}
+	}
+	for _, e := range entries {
+		if rooted[e.Project+"@"+e.Version] {
+			live = append(live, e)
+			continue
+		}
+		dead = append(dead, e)
+	}
+	return live, dead
+}
