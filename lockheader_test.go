@@ -81,3 +81,67 @@ func TestTheLockHeaderNamesCommandsThatExist(t *testing.T) {
 		t.Errorf("the rendered lock does not parse: %v", err)
 	}
 }
+
+// ⛔ A LOCK MUST SAY WHICH QUESTION ITS VERSIONS ANSWER. `bk lock --check`
+// re-resolves; re-resolving by the wrong question reports every pin as
+// having moved. The file already answers its own roots and platform for
+// that reason — this is one more of them.
+func TestALockSaysHowItsVersionsWerePinned(t *testing.T) {
+	d := sampleLock()
+	// THE DEFAULT IS WRITTEN OUT, not left absent: "pinned from the recipes"
+	// and "written by a bk that had no modes" must not look the same.
+	out := RenderLock(d)
+	if !strings.Contains(out, `pinned           = "recipes"`) {
+		t.Errorf("the default mode is not stated:\n%s", out)
+	}
+	got, err := ParseLock([]byte(out), "r.lock.hcl")
+	if err != nil || got.Pinned != PinsFromRecipes {
+		t.Errorf("round trip: Pinned=%q err=%v", got.Pinned, err)
+	}
+
+	d.Pinned = PinsPublished
+	out = RenderLock(d)
+	if !strings.Contains(out, `pinned           = "published"`) {
+		t.Errorf("the published mode is not stated:\n%s", out)
+	}
+	got, err = ParseLock([]byte(out), "p.lock.hcl")
+	if err != nil || got.Pinned != PinsPublished {
+		t.Errorf("round trip: Pinned=%q err=%v", got.Pinned, err)
+	}
+}
+
+// A LOCK WRITTEN BEFORE THE FIELD EXISTED still reads, as the recipes mode
+// it was. That is the compatibility rule this format states: new readers
+// read old locks.
+func TestALockWithNoModeReadsAsTheRecipesOne(t *testing.T) {
+	out := RenderLock(sampleLock())
+	before, _, _ := strings.Cut(out, "\npinned ")
+	_, after, _ := strings.Cut(out, "\npinned           = \"recipes\"")
+	old := before + after
+	if strings.Contains(old, "pinned") {
+		t.Fatalf("the fixture still carries the field:\n%s", old)
+	}
+	got, err := ParseLock([]byte(old), "old.lock.hcl")
+	if err != nil {
+		t.Fatalf("a lock from before the field does not parse: %v", err)
+	}
+	if LockPinned(got) != PinsFromRecipes {
+		t.Errorf("an absent mode read as %q, want %q", LockPinned(got), PinsFromRecipes)
+	}
+}
+
+// ⛔ AND A MODE THIS BUILD DOES NOT KNOW IS REFUSED, not guessed at: a
+// guess would re-resolve a different question and report what moved
+// against a set it never computed.
+func TestALockWithAnUnknownModeIsRefused(t *testing.T) {
+	d := sampleLock()
+	d.Pinned = PinsPublished
+	out := strings.Replace(RenderLock(d), `"published"`, `"whatever-comes-next"`, 1)
+	_, err := ParseLock([]byte(out), "future.lock.hcl")
+	if err == nil {
+		t.Fatal("a mode this build does not know was accepted")
+	}
+	if !strings.Contains(err.Error(), "whatever-comes-next") {
+		t.Errorf("the refusal does not name the mode: %v", err)
+	}
+}
