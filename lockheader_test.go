@@ -42,6 +42,28 @@ func TestTheLockHeaderNamesCommandsThatExist(t *testing.T) {
 		}
 	}
 
+	// ⛔ AND IT PROMISED BOTH USES WHEN IT CAN ONLY DELIVER ONE. The header
+	// said "`pkgx --lock <this file>` runs exactly these versions, and
+	// `bk factory --lock <this file>` builds them" — flatly, for every lock.
+	//
+	// Measured 2026-10-08, by generating a real lock and running it: a fresh
+	// lock of curl.se for linux/aarch64 pinned curl.se/ca-certs 2026.09.25
+	// and openssl.org 4.0.3, neither of which the factory had published, and
+	// `pkgx --lock` refused the file. A lock pins what the RECIPES can build,
+	// which runs ahead of what has been built; the two uses are not the same
+	// question and the header must not merge them.
+	if strings.Contains(out, "runs exactly these versions, and") {
+		t.Error("the header still promises pkgx --lock unconditionally")
+	}
+	for _, needed := range []string{
+		"PUBLISHED", // the condition under which pkgx --lock works
+		"-runnable", // and what to do when it does not
+	} {
+		if !strings.Contains(out, needed) {
+			t.Errorf("the header does not mention %q", needed)
+		}
+	}
+
 	// The header is a comment, so every line of it must be one: a line
 	// that lost its `#` would be parsed as HCL and refuse the whole file.
 	for _, line := range strings.Split(out, "\n") {
@@ -57,5 +79,69 @@ func TestTheLockHeaderNamesCommandsThatExist(t *testing.T) {
 	// says, the file still parses.
 	if _, err := ParseLock([]byte(out), "header.lock.hcl"); err != nil {
 		t.Errorf("the rendered lock does not parse: %v", err)
+	}
+}
+
+// ⛔ A LOCK MUST SAY WHICH QUESTION ITS VERSIONS ANSWER. `bk lock --check`
+// re-resolves; re-resolving by the wrong question reports every pin as
+// having moved. The file already answers its own roots and platform for
+// that reason — this is one more of them.
+func TestALockSaysHowItsVersionsWerePinned(t *testing.T) {
+	d := sampleLock()
+	// THE DEFAULT IS WRITTEN OUT, not left absent: "pinned from the recipes"
+	// and "written by a bk that had no modes" must not look the same.
+	out := RenderLock(d)
+	if !strings.Contains(out, `pinned           = "recipes"`) {
+		t.Errorf("the default mode is not stated:\n%s", out)
+	}
+	got, err := ParseLock([]byte(out), "r.lock.hcl")
+	if err != nil || got.Pinned != PinsFromRecipes {
+		t.Errorf("round trip: Pinned=%q err=%v", got.Pinned, err)
+	}
+
+	d.Pinned = PinsPublished
+	out = RenderLock(d)
+	if !strings.Contains(out, `pinned           = "published"`) {
+		t.Errorf("the published mode is not stated:\n%s", out)
+	}
+	got, err = ParseLock([]byte(out), "p.lock.hcl")
+	if err != nil || got.Pinned != PinsPublished {
+		t.Errorf("round trip: Pinned=%q err=%v", got.Pinned, err)
+	}
+}
+
+// A LOCK WRITTEN BEFORE THE FIELD EXISTED still reads, as the recipes mode
+// it was. That is the compatibility rule this format states: new readers
+// read old locks.
+func TestALockWithNoModeReadsAsTheRecipesOne(t *testing.T) {
+	out := RenderLock(sampleLock())
+	before, _, _ := strings.Cut(out, "\npinned ")
+	_, after, _ := strings.Cut(out, "\npinned           = \"recipes\"")
+	old := before + after
+	if strings.Contains(old, "pinned") {
+		t.Fatalf("the fixture still carries the field:\n%s", old)
+	}
+	got, err := ParseLock([]byte(old), "old.lock.hcl")
+	if err != nil {
+		t.Fatalf("a lock from before the field does not parse: %v", err)
+	}
+	if LockPinned(got) != PinsFromRecipes {
+		t.Errorf("an absent mode read as %q, want %q", LockPinned(got), PinsFromRecipes)
+	}
+}
+
+// ⛔ AND A MODE THIS BUILD DOES NOT KNOW IS REFUSED, not guessed at: a
+// guess would re-resolve a different question and report what moved
+// against a set it never computed.
+func TestALockWithAnUnknownModeIsRefused(t *testing.T) {
+	d := sampleLock()
+	d.Pinned = PinsPublished
+	out := strings.Replace(RenderLock(d), `"published"`, `"whatever-comes-next"`, 1)
+	_, err := ParseLock([]byte(out), "future.lock.hcl")
+	if err == nil {
+		t.Fatal("a mode this build does not know was accepted")
+	}
+	if !strings.Contains(err.Error(), "whatever-comes-next") {
+		t.Errorf("the refusal does not name the mode: %v", err)
 	}
 }

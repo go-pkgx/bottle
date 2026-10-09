@@ -62,8 +62,28 @@ type Lock struct {
 	Roots     []string
 	Pantry    string
 	Overlay   string
-	Pins      []LockPin
+	// Pinned says which question the versions answer: PinsFromRecipes (the
+	// newest the recipes can BUILD) or PinsPublished (the newest the factory
+	// has PUBLISHED for this platform). They are different sets — measured
+	// 2026-10-08, 2 of 5 pins for curl.se on linux/aarch64 — and only the
+	// second can be installed by `pkgx --lock`.
+	//
+	// It is written down rather than inferred because `bk lock --check`
+	// re-resolves, and re-resolving by the wrong question reports every
+	// pin as having moved. The file answers its own roots and platform for
+	// that same reason; the mode is one more of them.
+	//
+	// Empty means PinsFromRecipes: that is what every lock written before
+	// this field existed holds.
+	Pinned string
+	Pins   []LockPin
 }
+
+// The two questions a lock's versions can answer. See Lock.Pinned.
+const (
+	PinsFromRecipes = "recipes"
+	PinsPublished   = "published"
+)
 
 // LockfileVersion is this format's number. Bumped when a reader of the
 // previous one would MISREAD a file rather than merely miss a field.
@@ -71,6 +91,15 @@ type Lock struct {
 // The compatibility rule is Spack's, and worth copying: new readers read
 // old locks, old readers refuse new ones.
 const LockfileVersion = 1
+
+// LockPinned is d.Pinned with the default filled in, so every reader
+// resolves "absent" the same way instead of each one deciding.
+func LockPinned(d Lock) string {
+	if d.Pinned == PinsPublished {
+		return PinsPublished
+	}
+	return PinsFromRecipes
+}
 
 // RenderLock writes a lock. HCL, because every other file this ecosystem
 // reads by hand is HCL and HCLToMap reads it straight back.
@@ -89,14 +118,24 @@ func RenderLock(d Lock) string {
 		"# Sorted by project, not in build order: a lock is read as a diff, and a\n" +
 		"# topological order makes every line move when one dependency does.\n#\n" +
 		"# `bk lock --check <this file>` re-resolves and says what moved.\n" +
-		"# `pkgx --lock <this file>` runs exactly these versions, and\n" +
-		"# `bk factory --lock <this file>` builds them.\n\n")
+		"# `bk factory --lock <this file>` BUILDS these versions.\n#\n" +
+		"# `pkgx --lock <this file>` RUNS them — but only if every pin is\n" +
+		"# PUBLISHED for this platform. A lock pins what the RECIPES can build,\n" +
+		"# which runs ahead of what the factory has published: measured\n" +
+		"# 2026-10-08, a fresh lock of curl.se for linux/aarch64 had 2 of its 5\n" +
+		"# pins ahead of the published bottles, and `pkgx --lock` refused it.\n" +
+		"# `bk lock` says at write time which pins are not installable, and\n" +
+		"# `bk lock -runnable` pins what is published instead.\n\n")
 	fmt.Fprintf(&b, "lockfile_version = %d\n", d.Version)
 	fmt.Fprintf(&b, "bk               = %q\n", d.BK)
 	fmt.Fprintf(&b, "platform         = %q\n", d.Platform)
 	fmt.Fprintf(&b, "generated        = %q\n", d.Generated)
 	fmt.Fprintf(&b, "pantry           = %q\n", d.Pantry)
 	fmt.Fprintf(&b, "overlay          = %q\n", d.Overlay)
+	// Always written, including the default: a reader must be able to tell
+	// "pinned from the recipes" from "written by a bk that had no modes",
+	// and an absent line says both.
+	fmt.Fprintf(&b, "pinned           = %q\n", LockPinned(d))
 	b.WriteString("roots            = [")
 	for i, r := range d.Roots {
 		if i > 0 {
@@ -139,6 +178,18 @@ func ParseLock(src []byte, path string) (Lock, error) {
 		BK:        lockString(m["bk"]),
 		Pantry:    lockString(m["pantry"]),
 		Overlay:   lockString(m["overlay"]),
+		Pinned:    lockString(m["pinned"]),
+	}
+	// A mode this build does not know is not a mode it may GUESS at: it
+	// would re-resolve by the wrong question and report what moved against
+	// a set it never computed. lockfile_version is not bumped for the new
+	// key — an old reader that ignores it still reads the versions
+	// correctly, which is the bar the version number exists for — so this
+	// is the check that catches a FUTURE third mode.
+	if d.Pinned != "" && d.Pinned != PinsFromRecipes && d.Pinned != PinsPublished {
+		return Lock{}, fmt.Errorf("%s: pinned = %q, and this build knows %q and %q — "+
+			"read it with a newer bk rather than with this, which would re-resolve a different question",
+			path, d.Pinned, PinsFromRecipes, PinsPublished)
 	}
 	// THE VERSION IS READ BEFORE THE CONTENTS, and that order is the whole
 	// point of having one: it has to say "stop, you cannot interpret what
