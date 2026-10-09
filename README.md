@@ -144,6 +144,46 @@ side forgot.
 The version rule is Spack's: new readers read old locks, old readers refuse
 new ones.
 
+## A recipe can declare a service
+
+A daemon's recipe says how to run it as a service, as data, in one
+`service "<name>" { … }` block in its `package.hcl`. `ParseService` reads
+it and `FetchService` fetches it (overlay first, then the base pantry); the
+installer renders the unit from it, so the hardening every service shares is
+written once and a recipe states only what differs:
+
+```hcl
+service "authn-bridge" {
+  description   = "authn-bridge, an OpenID Connect provider in front of a SAML federation"
+  command       = "authn-bridge"                  # a program in bin/, never a path
+  args          = ["--config", "/etc/authn-bridge"]
+  stop-timeout  = "20s"
+  state-directory { mode = "0700" }               # /var/lib/authn-bridge
+  runtime-directory { mode = "0700" }             # /run/authn-bridge
+  configuration-directory { mode = "0750" }       # /etc/authn-bridge
+}
+```
+
+Also `user` (default: the name), `capabilities` (default: none), `restart`
+(`on-failure` | `always`), `reload` (`none` | `hup`), `proc-subset` (`pid` |
+`all`) and `documentation`. The fields are the ones that varied between three
+real daemons (go-authn's authnd, authn-bridge and authn-revokd), nothing more.
+
+**Readers before this version are not broken by it**, which was measured
+rather than assumed: the recipe reader is a generic one, so the block is one
+more key every consumer ignores — `FetchMeta` returns the same dependencies
+and provides with it as without it, and `bk lint` passes. That reader drops
+the block's **label**, though, so two `service` blocks are a duplicate key to
+it and the whole recipe becomes unreadable for every older client. Hence one
+service per recipe, refused here as well.
+
+The block itself is strict: an unknown attribute is refused rather than
+ignored, because a misspelt `capabilites` would otherwise render a unit
+without the capability. Arguments are a closed alphabet (letters, digits,
+`_ . / : = , @ + -`), because they are written into a unit that root loads,
+where a newline is a new directive and `%`, `$`, quotes and `;` all mean
+something.
+
 ## Where it is proven to work
 
 This package reads formats it did not write — ELF and Mach-O headers, OCI
