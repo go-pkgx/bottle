@@ -325,6 +325,15 @@ type Ver struct {
 	Raw  string
 	Nums []int
 	Tag  string
+	// Rebuild is the N in `1.8.2_N`: the SAME upstream software, built again
+	// — for a compiler security release, say, where nothing about the recipe
+	// or the version changes and the binary does.
+	//
+	// Absent means 0, which is Debian's rule for its own revision ("the
+	// absence of a debian_revision is equivalent to a debian_revision of 0")
+	// and, here, the literal state of the registry: measured 2026-10-10, 0
+	// of 1371 published version strings carry one.
+	Rebuild int
 }
 
 // tag is the registry tag to pull this version from.
@@ -339,8 +348,10 @@ func (v Ver) tag() string {
 // the first non-numeric character (e.g. "1w" in openssl 1.1.1w).
 func ParseVer(s string) Ver {
 	s = strings.TrimPrefix(strings.TrimSpace(s), "v")
-	parts := strings.Split(s, ".")
 	v := Ver{Raw: s}
+	body, rebuild := splitRebuild(s)
+	v.Rebuild = rebuild
+	parts := strings.Split(body, ".")
 	for _, p := range parts {
 		// stop at first non-numeric segment (e.g. "1w" in openssl 1.1.1w)
 		n := 0
@@ -354,6 +365,54 @@ func ParseVer(s string) Ver {
 	return v
 }
 
+// splitRebuild cuts a trailing `_N` rebuild counter off a version.
+//
+// ⛔ WHY IT NEEDS A DISCRIMINATOR. `_` is admitted by ValidateVersionString
+// because it is ordinary in versions elsewhere, so `2026_09_25` is a shape
+// this parser could meet — and reading its `_25` as a rebuild would turn one
+// release into the 25th build of another.
+//
+// The rule is therefore: the part BEFORE the underscore must be dotted. A
+// rebuild counter is something bk appends to a version it already resolved,
+// and every version this registry carries is dotted — measured 2026-10-10,
+// 1371 published version strings, the only non-alphanumeric rune among them
+// being `.`, not one underscore. A date-like `2026_09_25` has no dot before
+// its underscore and is left whole.
+//
+// `_beta` is not a rebuild either: what follows must be all digits.
+func splitRebuild(s string) (body string, rebuild int) {
+	i := strings.LastIndexByte(s, '_')
+	if i <= 0 || i == len(s)-1 {
+		return s, 0
+	}
+	head, tail := s[:i], s[i+1:]
+	if !strings.Contains(head, ".") {
+		return s, 0
+	}
+	n := 0
+	for k := 0; k < len(tail); k++ {
+		if tail[k] < '0' || tail[k] > '9' {
+			return s, 0
+		}
+		n = n*10 + int(tail[k]-'0')
+	}
+	return head, n
+}
+
+// cmpVer orders two versions: the numeric components first, then the REBUILD
+// counter.
+//
+// ⛔ WITHOUT THE SECOND HALF, A REBUILD IS INVISIBLE AND AN EXACT PIN LIES.
+// ParseVer stops each component at the first non-digit, so `1.8.2_1` and
+// `1.8.2` both yielded Nums [1 8 2] and compared EQUAL. Measured 2026-10-10,
+// before this existed:
+//
+//	1.8.2 satisfies "=1.8.2_1" ? true
+//	1.8.2_1 satisfies "=1.8.2" ? true
+//
+// A lock pinning the rebuilt bottle would therefore have installed the
+// un-rebuilt one — the vulnerable one — and said nothing. `satisfies` routes
+// every operator through here, so ordering and exactness are the same fix.
 func cmpVer(a, b Ver) int {
 	for i := 0; i < len(a.Nums) || i < len(b.Nums); i++ {
 		var x, y int
@@ -369,6 +428,12 @@ func cmpVer(a, b Ver) int {
 			}
 			return 1
 		}
+	}
+	if a.Rebuild != b.Rebuild {
+		if a.Rebuild < b.Rebuild {
+			return -1
+		}
+		return 1
 	}
 	return 0
 }

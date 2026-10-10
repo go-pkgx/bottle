@@ -126,6 +126,51 @@ projects fit; the deepest is four segments
 is the test's positive control, because a rule tightened too far refuses
 everything and reports green.
 
+## A version can carry a rebuild counter
+
+`1.8.2_1` is the **same upstream software** as `1.8.2`, built again — for a
+compiler security release, say, where nothing about the recipe or the version
+changes and the binary does.
+
+Absent means **0**. That is Debian's rule for its own revision (*"the absence
+of a debian_revision is equivalent to a debian_revision of 0"*) and, here, the
+literal state of the registry: measured 2026-10-10, **0 of 1371** published
+version strings carry one, and the only non-alphanumeric rune among them is
+`.`.
+
+⛔ **Before this, a rebuild was invisible and an exact pin lied about it.**
+`ParseVer` stops each component at the first non-digit, so `1.8.2_1` and
+`1.8.2` both yielded `Nums [1 8 2]` and compared **equal**:
+
+```
+1.8.2   satisfies "=1.8.2_1" ? true
+1.8.2_1 satisfies "=1.8.2"   ? true
+```
+
+A lock pinning the rebuilt bottle would have installed the un-rebuilt one — the
+vulnerable one, since a rebuild is what a toolchain security fix produces — and
+said nothing. `satisfies` routes every operator through one comparator, so
+ordering and exactness were the same fix.
+
+It orders **numerically**, and a real version bump still dominates any number
+of rebuilds below it:
+
+```
+1.8.2 < 1.8.2_1 < 1.8.2_2 < 1.8.2_10 < 1.8.3
+```
+
+### An underscore is not always a rebuild
+
+`_` is admitted by `ValidateVersionString` because it is ordinary in versions
+elsewhere, so `2026_09_25` is a shape this parser can meet — and reading its
+`_25` as a rebuild would turn one release into the 25th build of another.
+
+The rule is that the part **before** the underscore must be dotted. Every
+version this registry carries is; a date-like one is not. `_beta` is not a
+rebuild either: what follows must be all digits. And it splits at the **last**
+underscore, so in `1.0_2_3` the version is `1.0_2` and the rebuild is 3 —
+bk appends `_N` to a version it already resolved.
+
 ## The lock format lives here
 
 `bk lock` wrote locks and nothing could read one back, because the reader
