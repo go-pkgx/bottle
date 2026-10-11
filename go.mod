@@ -3,7 +3,7 @@ module github.com/go-pkgx/bottle
 go 1.27.1
 
 require (
-	github.com/go-attest/sign v0.2.0
+	github.com/go-attest/sign v0.3.0
 	github.com/hashicorp/hcl/v2 v2.25.0
 	github.com/klauspost/compress v1.20.1
 	github.com/opencontainers/go-digest v1.0.0
