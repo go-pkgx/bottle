@@ -71,3 +71,148 @@ func TestUnsatisfiableConstraintNamesTheVersionsItHas(t *testing.T) {
 		t.Errorf("still a count: %q", got)
 	}
 }
+
+// ⛔ NO CONSTRAINT MUST NOT PRINT AN EMPTY ONE.
+//
+// Reported from the field on 2026-10-12: `pkgx hugo version` asks for any
+// version, so collectGraph drops the "*" ("nothing to intersect") and
+// PickVersionForAll is called with NO constraints. quoteAll rendered "" and
+// the sentence read
+//
+//	no version of opentofu.org satisfies  AND is published for darwin/aarch64 (available: 1.12.5…)
+//
+// — two spaces where the reason should be, blaming a constraint that does not
+// exist. With nothing constrained the platform is the whole of what went
+// wrong, so the clause is omitted rather than filled with "any version".
+func TestNoConstraintOmitsTheSatisfiesClause(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	base := fr.base("go-pkgx/bottles")
+	old := DistBase
+	DistBase = base
+	resetOCICache()
+	t.Cleanup(func() { DistBase = old; resetOCICache() })
+
+	c, err := NewOCIClient(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Published for linux only, so darwin reaches the "absent" arm.
+	if _, err := c.PushWithReferrers("only.test", "1.2.3", "linux", "x86-64", makeGzTarball("linux"), ".tar.gz", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = PickVersionForAll("only.test", nil, "darwin", "aarch64")
+	if err == nil {
+		t.Fatal("an unpublished platform resolved")
+	}
+	got := err.Error()
+	// ⛔ THE REGRESSION ITSELF: the hole, in either spelling.
+	if strings.Contains(got, "satisfies  AND") || strings.Contains(got, `satisfies "" `) {
+		t.Errorf("the empty constraint is still printed: %q", got)
+	}
+	if strings.Contains(got, "satisfies") {
+		t.Errorf("nothing was constrained, so the clause should be gone: %q", got)
+	}
+	// And it still says what went wrong and what exists.
+	for _, want := range []string{"not published", "darwin/aarch64", "1.2.3"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q from: %q", want, got)
+		}
+	}
+}
+
+// The control for the test above: WITH a constraint the clause is still there,
+// quoted. Without this, removing the clause unconditionally would pass.
+func TestAConstraintIsStillQuotedInTheMessage(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	base := fr.base("go-pkgx/bottles")
+	old := DistBase
+	DistBase = base
+	resetOCICache()
+	t.Cleanup(func() { DistBase = old; resetOCICache() })
+
+	c, err := NewOCIClient(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.PushWithReferrers("other.test", "1.2.3", "linux", "x86-64", makeGzTarball("linux"), ".tar.gz", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = PickVersionForAll("other.test", []string{"^1"}, "darwin", "aarch64")
+	if err == nil {
+		t.Fatal("an unpublished platform resolved")
+	}
+	if got := err.Error(); !strings.Contains(got, `satisfies "^1" AND is published`) {
+		t.Errorf("the constraint clause is gone when there IS a constraint: %q", got)
+	}
+}
+
+// No versions and no constraint: there is nothing to say about satisfying
+// either, so the sentence says the one thing that is true.
+func TestNoVersionsAndNoConstraintSaysSo(t *testing.T) {
+	up, _ := upstreamVersionsServer(t, "empty.org", "linux", "aarch64", nil)
+	old := DistBase
+	DistBase = up
+	t.Cleanup(func() { DistBase = old })
+
+	_, err := PickVersionForAll("empty.org", nil, "linux", "aarch64")
+	if err == nil {
+		t.Fatal("a project with no versions resolved")
+	}
+	got := err.Error()
+	if !strings.Contains(got, "no versions of empty.org are known") {
+		t.Errorf("got %q", got)
+	}
+	if strings.Contains(got, "satisfies") {
+		t.Errorf("it still mentions satisfying nothing: %q", got)
+	}
+}
+
+// ⛔ "NOT PUBLISHED HERE" IS NOT AN AUTH FAILURE, and must not read like one.
+//
+// Reported from the field on 2026-10-12. `pkgx openstack --version` against
+// the signed registry answered:
+//
+//	resolve opendev.org/openstack/python-openstackclient v10.4.0:
+//	  GET ".../manifests/10.4.0": GET "https://ghcr.io/token?scope=…":
+//	  response status code 403: denied: requested access to the resource is denied
+//
+// ghcr answers 403 at the TOKEN endpoint for a repository that does not
+// exist, so for an anonymous read that is "we do not carry this" — which
+// repoAbsent already decided for the version listing while this path handed
+// the transport error straight out. The same condition had two voices
+// depending on which call noticed first.
+//
+// The underlying error is KEPT, wrapped: a reader debugging a genuine
+// credential problem still needs the status, and a message that threw it away
+// would trade one blind spot for another.
+func TestAnAbsentRepositorySaysSoRatherThanTheTransportError(t *testing.T) {
+	fr := newFakeRegistry(t, false)
+	base := fr.base("go-pkgx/bottles")
+	old := DistBase
+	DistBase = base
+	resetOCICache()
+	t.Cleanup(func() { DistBase = old; resetOCICache() })
+
+	c, err := NewOCIClient(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Never pushed: the repository does not exist.
+	_, err = c.PlatformAnnotations("never.pushed", "1.0.0", "linux", "x86-64")
+	if err == nil {
+		t.Fatal("a repository that was never pushed resolved")
+	}
+	got := err.Error()
+	if !strings.Contains(got, "is not published in") {
+		t.Errorf("it does not say the registry lacks it: %q", got)
+	}
+	if !strings.Contains(got, "never.pushed") {
+		t.Errorf("it does not name the project: %q", got)
+	}
+	// The transport detail survives, for the case where it IS the problem.
+	if !strings.Contains(got, "404") && !strings.Contains(got, "403") && !strings.Contains(got, "not found") {
+		t.Errorf("the underlying status was thrown away: %q", got)
+	}
+}
