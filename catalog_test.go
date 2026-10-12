@@ -783,3 +783,73 @@ func TestWhyDependsThroughACycleIsAValidPath(t *testing.T) {
 		}
 	}
 }
+
+// providesCatalog is its own fixture rather than an extension of
+// sampleCatalog: several tests above assert that one's exact contents, and a
+// `provides` added there would be invisible until one of them moved.
+func providesCatalog() Catalog {
+	return Catalog{
+		Generated: "2026-10-12T09:00:00Z",
+		Projects: []CatalogProject{
+			// Insertion order is the REVERSE of sorted order on purpose, so
+			// the sort in ProvidersOf is actually exercised. With these two
+			// the other way round the test would pass without it.
+			{Project: "zoo.example/hugo-mirror", Provides: []string{"hugo"}},
+			{Project: "gohugo.io", Provides: []string{"hugo"}},
+			{Project: "crates.io/ripgrep", Provides: []string{"rg"}},
+			{Project: "zlib.net", Versions: []string{"1.3.2"}},
+			// A MALFORMED entry, deliberately. A catalogue is fetched from a
+			// registry, so "provides holds no empty strings" is a property of
+			// the publisher and not of the bytes we are handed. Without this
+			// the empty-command guard is untested: with every Provides
+			// well-formed, removing the guard changes nothing and the test
+			// for it passes either way — which is how it was first written,
+			// and a mutation is what said so.
+			{Project: "malformed.example", Provides: []string{""}},
+		},
+	}
+}
+
+func TestProvidersOfFindsTheProjectBehindACommand(t *testing.T) {
+	c := providesCatalog()
+	if got := c.ProvidersOf("rg"); len(got) != 1 || got[0] != "crates.io/ripgrep" {
+		t.Errorf("ProvidersOf(rg) = %v, want [crates.io/ripgrep]", got)
+	}
+}
+
+// ⛔ Two providers come back as two. A caller must be able to refuse rather
+// than be handed a winner this data cannot justify.
+func TestProvidersOfReturnsEveryProviderSorted(t *testing.T) {
+	c := providesCatalog()
+	got := c.ProvidersOf("hugo")
+	want := []string{"gohugo.io", "zoo.example/hugo-mirror"}
+	if len(got) != len(want) {
+		t.Fatalf("ProvidersOf(hugo) = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ProvidersOf(hugo)[%d] = %q, want %q (sorted, not insertion order)", i, got[i], want[i])
+		}
+	}
+}
+
+func TestProvidersOfKnowsNothingOfAProjectName(t *testing.T) {
+	c := providesCatalog()
+	// `zlib.net` is a project, not a command. Matching it here would make
+	// `pkgx zlib.net` resolve twice over and hide a real miss.
+	if got := c.ProvidersOf("zlib.net"); got != nil {
+		t.Errorf("ProvidersOf(zlib.net) = %v, want nil", got)
+	}
+	if got := c.ProvidersOf("nope"); got != nil {
+		t.Errorf("ProvidersOf(nope) = %v, want nil", got)
+	}
+}
+
+// An empty command is what an empty argument looks like; it must not match
+// every project that happens to declare nothing.
+func TestProvidersOfRefusesTheEmptyCommand(t *testing.T) {
+	c := providesCatalog()
+	if got := c.ProvidersOf(""); got != nil {
+		t.Errorf(`ProvidersOf("") = %v, want nil`, got)
+	}
+}

@@ -193,6 +193,45 @@ func (c *Catalog) Lookup(project string) (CatalogProject, bool) {
 	return CatalogProject{}, false
 }
 
+// ProvidersOf returns every project that puts this COMMAND on PATH, sorted.
+//
+// The inverse of Provides, and the question people actually arrive with: you
+// know `hugo`, not `gohugo.io`. Reported from the field on 2026-10-12 —
+// `pkgx hugo version` answered
+//
+//	no recipe for hugo in …pantry-overlay… or …pkgxdev/pantry…
+//
+// while `pkgx search hugo` in the same store already printed
+// `gohugo.io  hugo`. The mapping was in the catalogue and only the search path
+// consulted it.
+//
+// ⛔ It returns a LIST, and the singular case is the caller's to insist on.
+// Returning one project would mean picking between two providers of the same
+// command, and there is no basis in this data for that choice: `provides` says
+// what a project puts on PATH, not which project owns the name. A caller that
+// wants to run something must refuse an ambiguous word and say which projects
+// it was between — guessing silently would run the wrong program under the
+// right name, which is the one outcome worse than an error.
+//
+// An empty command returns nothing rather than everything: it is what an
+// empty argument looks like, and `provides` holds no empty strings.
+func (c *Catalog) ProvidersOf(command string) []string {
+	if command == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range c.Projects {
+		for _, cmd := range p.Provides {
+			if cmd == command {
+				out = append(out, p.Project)
+				break
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Complete returns the completions for a partially typed project name.
 //
 // It is Children of the enclosing node, filtered by the partial segment. A
