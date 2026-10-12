@@ -3,6 +3,7 @@ package bottle
 import (
 	"debug/macho"
 	"encoding/binary"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -29,12 +30,66 @@ const (
 //
 // A file that is not a Mach-O is not an error worth propagating — a store is
 // mostly text — so the caller gets an empty list and the walk continues.
+// ⛔ A UNIVERSAL ("fat") file is read too, through every one of its slices.
+//
+// `macho.Open` handles only a thin file, and a universal one made the closure
+// check say it could not read a library at all. Reported from the field on
+// 2026-10-12, installing python-openstackclient on darwin/aarch64:
+//
+//	charset_normalizer/*.so looks like a Mach-O (universal) but cannot be read
+//
+// which is the warning five lines down in unresolvedRefs — so the file was
+// correctly identified as a Mach-O, correctly flagged as unreadable, and its
+// references were simply unknown. An unknown reference is how a closure gets
+// declared complete while it is not, which is the one failure this file exists
+// to prevent.
+//
+// The UNION of the slices, not the slice matching this host, and the choice is
+// deliberate — the report suggested selecting the arm64 slice. Two reasons
+// against it:
+//
+//   - On macOS an x86-64 slice still runs, under Rosetta. "No slice for this
+//     architecture" therefore does not mean "will not run here", so picking by
+//     host arch can under-report for a binary that executes perfectly well.
+//   - Under-reporting is the dangerous direction. A universal binary's slices
+//     name the same dylib PATHS in practice, since the libraries are universal
+//     too, so the union is almost always identical to any single slice — and
+//     where it is not, the extra reference is a real thing something loads.
+//
+// Deduplicated and sorted, because a union across slices has no natural order.
+// The thin path keeps its load order untouched: there it is the file's own.
 func MachoNeeded(p string) ([]string, error) {
-	f, err := macho.Open(p)
-	if err != nil {
-		return nil, err
+	f, thinErr := macho.Open(p)
+	if thinErr == nil {
+		defer f.Close()
+		return dylibRefs(f), nil
 	}
-	defer f.Close()
+	fat, fatErr := macho.OpenFat(p)
+	if fatErr != nil {
+		// BOTH errors. For an ordinary text file the thin error is the one
+		// that says so; for a corrupt universal file it is the fat one, and
+		// returning only the first made the second unsayable.
+		return nil, errors.Join(thinErr, fatErr)
+	}
+	defer fat.Close()
+	seen := map[string]bool{}
+	var out []string
+	for i := range fat.Arches {
+		for _, ref := range dylibRefs(fat.Arches[i].File) {
+			if !seen[ref] {
+				seen[ref] = true
+				out = append(out, ref)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// dylibRefs is the load-command walk, over one thin image. Split out so a
+// universal file's slices go through exactly the same reader rather than a
+// second copy of it.
+func dylibRefs(f *macho.File) []string {
 	var out []string
 	for _, l := range f.Loads {
 		b := l.Raw()
@@ -56,7 +111,7 @@ func MachoNeeded(p string) ([]string, error) {
 		}
 		out = append(out, string(s))
 	}
-	return out, nil
+	return out
 }
 
 func indexZero(b []byte) int {
