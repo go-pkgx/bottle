@@ -24,6 +24,82 @@ type mcmd struct {
 // went short once before.
 func writeMachO(t *testing.T, p string, cmds ...mcmd) {
 	t.Helper()
+	writeFile(t, p, machoBytes(cpuArm64, cmds...))
+}
+
+// CPU types, as a fat_arch records them.
+const (
+	cpuArm64 = 0x0100000c
+	cpuAmd64 = 0x01000007
+)
+
+func writeFile(t *testing.T, p string, b []byte) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// fatSlice is one architecture's image inside a universal file.
+type fatSlice struct {
+	cpu  uint32
+	cmds []mcmd
+}
+
+// writeFatMachO wraps thin images in a fat_header, by hand for the same reason
+// writeMachO builds one by hand: `lipo` exists only on darwin, and a
+// darwin-only fixture is how the coverage gate on linux went short once before.
+//
+// Every field of fat_header and fat_arch is BIG endian, whatever the slices
+// are — that is the format, not an oversight.
+func writeFatMachO(t *testing.T, p string, slices ...fatSlice) {
+	t.Helper()
+	be := binary.BigEndian
+	const hdr, arch = 8, 20
+	// Slices are page-aligned, which is what align=12 (2^12) promises. A
+	// reader that trusted the alignment and not the offset would read
+	// garbage otherwise.
+	const algn, page = 12, 1 << 12
+
+	bodies := make([][]byte, len(slices))
+	for i, s := range slices {
+		bodies[i] = machoBytes(s.cpu, s.cmds...)
+	}
+	off := hdr + arch*len(slices)
+	if r := off % page; r != 0 {
+		off += page - r
+	}
+	var out []byte
+	head := make([]byte, hdr+arch*len(slices))
+	be.PutUint32(head[0:], 0xcafebabe)          // FAT_MAGIC
+	be.PutUint32(head[4:], uint32(len(slices))) // nfat_arch
+	for i, b := range bodies {
+		a := head[hdr+arch*i:]
+		be.PutUint32(a[0:], slices[i].cpu) // cputype
+		be.PutUint32(a[4:], 0)             // cpusubtype
+		be.PutUint32(a[8:], uint32(off))   // offset
+		be.PutUint32(a[12:], uint32(len(b)))
+		be.PutUint32(a[16:], algn)
+		off += len(b)
+		if r := off % page; r != 0 {
+			off += page - r
+		}
+	}
+	out = append(out, head...)
+	for i, b := range bodies {
+		a := head[hdr+arch*i:]
+		for len(out) < int(be.Uint32(a[8:])) {
+			out = append(out, 0)
+		}
+		out = append(out, b...)
+	}
+	writeFile(t, p, out)
+}
+
+func machoBytes(cpu uint32, cmds ...mcmd) []byte {
 	le := binary.LittleEndian
 	var body []byte
 	for _, c := range cmds {
@@ -44,17 +120,12 @@ func writeMachO(t *testing.T, p string, cmds ...mcmd) {
 	}
 	buf := make([]byte, 32+len(body))
 	le.PutUint32(buf[0:], 0xfeedfacf) // MH_MAGIC_64
-	le.PutUint32(buf[4:], 0x0100000c) // CPU_TYPE_ARM64
-	le.PutUint32(buf[12:], 6)         // MH_DYLIB
+	le.PutUint32(buf[4:], cpu)
+	le.PutUint32(buf[12:], 6) // MH_DYLIB
 	le.PutUint32(buf[16:], uint32(len(cmds)))
 	le.PutUint32(buf[20:], uint32(len(body)))
 	copy(buf[32:], body)
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(p, buf, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	return buf
 }
 
 // What a file LOADS, and nothing else. LC_ID_DYLIB says where the file expects
@@ -336,5 +407,89 @@ func TestMachoMagicTellsAClassFileApart(t *testing.T) {
 		if got := machoMagic(p); got != tc.want {
 			t.Errorf("%s: machoMagic = %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// A universal file is read through every slice. Before this, `macho.Open`
+// refused it and the closure check printed "looks like a Mach-O (universal)
+// but cannot be read" — the field report that prompted it, installing
+// python-openstackclient on darwin/aarch64.
+//
+// The two slices name DIFFERENT libraries on purpose: with both naming the
+// same one, reading a single slice would pass this test and the union would be
+// untested.
+func TestMachoNeededReadsEverySliceOfAUniversalFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "fat.so")
+	writeFatMachO(t, p,
+		fatSlice{cpu: cpuArm64, cmds: []mcmd{{lcLoadDylib, "@rpath/only.org/v1/lib/libarm.1.dylib"}}},
+		fatSlice{cpu: cpuAmd64, cmds: []mcmd{{lcLoadDylib, "@rpath/only.org/v1/lib/libamd.1.dylib"}}},
+	)
+	got, err := MachoNeeded(p)
+	if err != nil {
+		t.Fatalf("MachoNeeded on a universal file: %v", err)
+	}
+	want := []string{"@rpath/only.org/v1/lib/libamd.1.dylib", "@rpath/only.org/v1/lib/libarm.1.dylib"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want both slices' references %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("got[%d] = %q, want %q (sorted)", i, got[i], want[i])
+		}
+	}
+}
+
+// The same reference in two slices is one reference. A universal binary's
+// slices normally name the SAME dylib paths, so without this the common case
+// would report everything twice.
+func TestMachoNeededDeduplicatesAcrossSlices(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "same.dylib")
+	ref := "@rpath/both.org/v2/lib/libboth.2.dylib"
+	writeFatMachO(t, p,
+		fatSlice{cpu: cpuArm64, cmds: []mcmd{{lcLoadDylib, ref}}},
+		fatSlice{cpu: cpuAmd64, cmds: []mcmd{{lcLoadDylib, ref}}},
+	)
+	got, err := MachoNeeded(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != ref {
+		t.Errorf("got %v, want exactly [%s]", got, ref)
+	}
+}
+
+// A thin file still goes through the thin reader, in its own load order. The
+// positive control: without it, every test here could be passing because
+// MachoNeeded now reads everything as a union.
+func TestMachoNeededStillReadsAThinFileInLoadOrder(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "thin.dylib")
+	writeMachO(t, p,
+		mcmd{lcLoadDylib, "@rpath/z.org/v1/lib/libz.1.dylib"},
+		mcmd{lcLoadDylib, "@rpath/a.org/v1/lib/liba.1.dylib"},
+	)
+	got, err := MachoNeeded(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// z before a: the FILE's order, not sorted. A thin file's load order is
+	// its own and this must not start sorting it.
+	if len(got) != 2 || got[0] != "@rpath/z.org/v1/lib/libz.1.dylib" {
+		t.Errorf("got %v, want the file's load order with libz first", got)
+	}
+}
+
+// Neither reader can open it: both failures are reported. Returning only the
+// thin error made "this is a corrupt universal file" unsayable.
+func TestMachoNeededReportsBothFailures(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "truncated")
+	// FAT_MAGIC and a plausible nfat_arch, then nothing: the magic says
+	// universal, so the thin reader's "not a Mach-O" is the less useful half.
+	writeFile(t, p, []byte{0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 2})
+	got, err := MachoNeeded(p)
+	if err == nil {
+		t.Fatalf("a truncated universal file read as %v, want an error", got)
+	}
+	if !strings.Contains(err.Error(), "fat") && !strings.Contains(err.Error(), "Mach-O") {
+		t.Errorf("the error names neither attempt: %v", err)
 	}
 }
