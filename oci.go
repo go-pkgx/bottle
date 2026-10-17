@@ -347,6 +347,32 @@ func (c *OCIClient) PlatformAnnotations(project, ver, osn, arch string) (map[str
 func (c *OCIClient) resolvePlatform(ctx context.Context, repo *remote.Repository, project, ver, osn, arch string) (ocispec.Descriptor, ocispec.Manifest, error) {
 	tagDesc, rc, err := repo.FetchReference(ctx, ver)
 	if err != nil {
+		// ⛔ A REGISTRY THAT DOES NOT CARRY THE PACKAGE SAYS SO, rather than
+		// handing a reader ghcr's transport error.
+		//
+		// Reported from the field on 2026-10-12. `pkgx openstack --version`
+		// against our signed registry answered:
+		//
+		//	resolve opendev.org/openstack/python-openstackclient v10.4.0:
+		//	  GET ".../manifests/10.4.0": GET "https://ghcr.io/token?scope=…":
+		//	  response status code 403: denied: requested access to the resource is denied
+		//
+		// which reads as a credentials problem. It is not: ghcr answers 403
+		// at the TOKEN endpoint for a repository that does not exist, so for
+		// an anonymous read the honest reading is "we do not carry this".
+		// That is exactly what repoAbsent already decides for the version
+		// listing — this path simply never asked it, so the same condition
+		// got two different voices depending on which call noticed first.
+		//
+		// repoAbsent, not a second classifier: it is the one that knows a 403
+		// WITH credentials configured is a real access problem and must
+		// surface, and duplicating that judgement here is how the two copies
+		// would drift.
+		if repoAbsent(err) {
+			return ocispec.Descriptor{}, ocispec.Manifest{}, fmt.Errorf(
+				"%s is not published in %s/%s (%w)",
+				project, repo.Reference.Registry, repo.Reference.Repository, err)
+		}
 		return ocispec.Descriptor{}, ocispec.Manifest{}, fmt.Errorf("resolve %s v%s: %w", project, ver, err)
 	}
 	body, err := orascontent.ReadAll(rc, tagDesc)

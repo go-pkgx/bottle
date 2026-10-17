@@ -1006,9 +1006,32 @@ func PickVersionForAll(project string, constraints []string, osn, arch string) (
 		}
 		return vs[i], nil
 	}
+	// ⛔ NO CONSTRAINT MEANS THE CLAUSE IS OMITTED, not printed empty.
+	//
+	// Reported from the field on 2026-10-12. `pkgx hugo version` asks for any
+	// version, so `constraints` is empty, quoteAll renders "" and the message
+	// read:
+	//
+	//	no version of opentofu.org satisfies  AND is published for darwin/aarch64 (available: 1.12.5…)
+	//
+	// Two spaces where the reason should be. A reader looking for what they
+	// asked for finds a hole, and the sentence blames a constraint that does
+	// not exist. The report's own suggestion — omit the clause, or say "any
+	// version" — and omitting is the one that leaves a sentence worth reading:
+	// what went wrong is the PLATFORM, and with nothing constrained that is
+	// the whole of it.
 	if len(absent) > 0 {
+		if len(constraints) == 0 {
+			return Ver{}, fmt.Errorf("no version of %s is published for %s/%s (available: %s; not published here: %s)",
+				project, osn, arch, availableVersions(vs), strings.Join(absent, " "))
+		}
 		return Ver{}, fmt.Errorf("no version of %s satisfies %s AND is published for %s/%s (available: %s; satisfy but not published here: %s)",
 			project, quoteAll(constraints), osn, arch, availableVersions(vs), strings.Join(absent, " "))
+	}
+	if len(constraints) == 0 {
+		// Reachable only with no versions at all: with nothing constrained
+		// every version satisfies, so the loop above would have returned one.
+		return Ver{}, fmt.Errorf("no versions of %s are known", project)
 	}
 	return Ver{}, fmt.Errorf("no version of %s satisfies %s (available: %s)", project, quoteAll(constraints), availableVersions(vs))
 }
