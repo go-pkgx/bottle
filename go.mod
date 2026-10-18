@@ -1,6 +1,6 @@
 module github.com/go-pkgx/bottle
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/go-attest/sign v0.3.0
