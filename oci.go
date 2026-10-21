@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -271,6 +272,90 @@ func (c *OCIClient) ListTags(project string) ([]string, error) {
 		return nil, err
 	}
 	return tags, nil
+}
+
+// Platforms lists the platforms one version tag publishes, in pkgx's spelling
+// (`linux/x86-64`), sorted and deduplicated.
+//
+// # WHY IT EXISTS
+//
+// A caller could already ask "is THIS platform published" one guess at a time
+// — HasPlatform does that — and could not ask which ones are. ⛔ Measured
+// 2026-10-20: `go-pkgx/packages`' daily CVE lane carried its platform list in
+// the workflow file, the list said two, and the registry published SIX. The
+// four nobody asked about were clean, so the cost was coverage rather than an
+// exposure, but the mechanism guarantees the next platform is missed too
+// (go-pkgx/pkgx#119).
+//
+// ⛔ AN EMPTY LIST IS AN ERROR, NEVER AN ANSWER. fetchOrNewIndex, the other
+// reader of this document, turns every failure into an empty index on purpose
+// — it is composing a push and "nothing published yet" is its normal case.
+// For a LISTING that behaviour is the defect: "this version publishes no
+// platform" and "I could not read the index" would print the same nothing,
+// and this fleet has published that zero before.
+func (c *OCIClient) Platforms(project, ver string) ([]string, error) {
+	repo, err := c.repository(project)
+	if err != nil {
+		return nil, err
+	}
+	ctx := context.Background()
+	desc, rc, err := repo.FetchReference(ctx, ver)
+	if err != nil {
+		if repoAbsent(err) {
+			return nil, fmt.Errorf("%s is not published in %s/%s (%w)",
+				project, repo.Reference.Registry, repo.Reference.Repository, err)
+		}
+		return nil, fmt.Errorf("resolve %s v%s: %w", project, ver, err)
+	}
+	body, err := orascontent.ReadAll(rc, desc)
+	rc.Close()
+	if err != nil {
+		return nil, fmt.Errorf("read the index of %s v%s: %w", project, ver, err)
+	}
+	// A single manifest is one platform's worth of bytes with nothing saying
+	// which platform, so it cannot answer this question. Saying so beats
+	// returning the host's guess.
+	if !isIndexMedia(desc.MediaType, body) {
+		return nil, fmt.Errorf("%s v%s is a single manifest (%s), not a multi-platform index: it does not say which platforms exist",
+			project, ver, desc.MediaType)
+	}
+	var idx ocispec.Index
+	if err := json.Unmarshal(body, &idx); err != nil {
+		return nil, fmt.Errorf("decode the index of %s v%s: %w", project, ver, err)
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, m := range idx.Manifests {
+		p := m.Platform
+		// ⛔ THREE KINDS OF ENTRY ARE NOT A PLATFORM, and all three are
+		// ordinary. An index may carry a descriptor with no platform at all;
+		// buildkit writes attestation manifests as the literal
+		// `unknown/unknown` (image-spec leaves the field optional and says
+		// nothing against it); and either, named as one, would put a line in
+		// this list that no caller can pass back to --platform.
+		if p == nil || p.OS == "" || p.Architecture == "" {
+			continue
+		}
+		if p.OS == "unknown" || p.Architecture == "unknown" {
+			continue
+		}
+		name := p.OS + "/" + pkgxArch(p.Architecture)
+		// A variant distinguishes platforms (arm/v7 against arm/v6), so
+		// dropping it would merge two entries into one name and under-report.
+		if p.Variant != "" {
+			name += "/" + p.Variant
+		}
+		if !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%s v%s: the index has %d entry(ies) and none of them names a platform",
+			project, ver, len(idx.Manifests))
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // Pull downloads the bottle tarball for a project/version/os/arch and returns
