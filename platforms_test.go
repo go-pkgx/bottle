@@ -75,6 +75,38 @@ func TestPlatformsListsWhatTheIndexPublishes(t *testing.T) {
 	}
 }
 
+// ⛔ THE TAG FILTER EVERY ListTags CALLER NEEDS, exported because one could
+// not reach it. `pkgs request` filtered a listing with IsPlatformTag alone
+// and reported a project with no releases as "2 version(s) tagged": the two
+// were `sha256-…` referrer tags, which exist because ghcr implements no
+// referrers API and ORAS falls back to tagging attestations by digest.
+// Asking Platforms about one of them then returned "the index has 3
+// entry(ies) and none of them names a platform" — a true sentence about a
+// question nobody meant to ask.
+func TestIsVersionTagIsReachableAndKeepsItsRule(t *testing.T) {
+	for tag, want := range map[string]bool{
+		"1.0.0":           true,
+		"v1.0.0":          true,
+		"10.4.0":          true,
+		"1.0.0+glibc2.28": true,
+		"sha256-5e3e8dd10513699116134fe1455e53db8d7d6b575a25d539bac524fc920c12b9": false,
+		"sha256-abc123": false,
+		"latest":        false,
+		"":              false,
+	} {
+		if got := IsVersionTag(tag); got != want {
+			t.Errorf("IsVersionTag(%q) = %v, want %v", tag, got, want)
+		}
+	}
+	// And it is the SAME rule as the unexported one, not a second copy that
+	// can drift away from it.
+	for _, tag := range []string{"1.2.3", "sha256-deadbeef", "v9", "nonsense"} {
+		if IsVersionTag(tag) != isVersionTag(tag) {
+			t.Errorf("the exported and unexported forms disagree about %q", tag)
+		}
+	}
+}
+
 // ⛔ THREE SHAPES THAT ARE NOT A PLATFORM, and all three are ordinary. An
 // index may hold a descriptor with no platform; buildkit writes attestation
 // manifests as the literal `unknown/unknown`. Either, named as one, puts a
