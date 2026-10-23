@@ -917,7 +917,7 @@ func selectVersions(tags []string, wantFlavor string) []Ver {
 	return vs
 }
 
-// isVersionTag reports whether a registry tag names a package VERSION rather
+// IsVersionTag reports whether a registry tag names a package VERSION rather
 // than registry bookkeeping.
 //
 // This matters because ghcr implements no referrers API, so ORAS keeps each
@@ -926,6 +926,17 @@ func selectVersions(tags []string, wantFlavor string) []Ver {
 // phantom "0" entries — inflating every count, and (worse) making a listing
 // look non-empty so the upstream-dist fallback never engaged for a project we
 // had published only some versions of.
+//
+// ⛔ EXPORTED BECAUSE EVERY CALLER OF ListTags NEEDS IT AND ONE COULD NOT
+// REACH IT. `pkgs request` (go-pkgx/pkgx) filtered the listing with
+// IsPlatformTag alone, and its first live run reported a project with no
+// releases as "2 version(s) tagged" — the two being `sha256-…` referrers,
+// one of which it then asked for platforms and got "the index has 3
+// entry(ies) and none of them names a platform". The rule was already
+// written and tested here; what was missing was the ability to use it, and
+// a second copy in the caller is how two answers to one question begin.
+func IsVersionTag(tag string) bool { return isVersionTag(tag) }
+
 func isVersionTag(tag string) bool {
 	// THE SHAPE, not just the first byte. A tag list is what a registry
 	// says, and a registry is a configured endpoint — PKGX_DIST and the
