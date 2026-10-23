@@ -302,8 +302,12 @@ func (c *OCIClient) Platforms(project, ver string) ([]string, error) {
 	desc, rc, err := repo.FetchReference(ctx, ver)
 	if err != nil {
 		if repoAbsent(err) {
-			return nil, fmt.Errorf("%s is not published in %s/%s (%w)",
-				project, repo.Reference.Registry, repo.Reference.Repository, err)
+			return nil, &NotPublishedError{
+				Project:  project,
+				Registry: repo.Reference.Registry,
+				Repo:     repo.Reference.Repository,
+				Err:      err,
+			}
 		}
 		return nil, fmt.Errorf("resolve %s v%s: %w", project, ver, err)
 	}
@@ -454,9 +458,12 @@ func (c *OCIClient) resolvePlatform(ctx context.Context, repo *remote.Repository
 		// surface, and duplicating that judgement here is how the two copies
 		// would drift.
 		if repoAbsent(err) {
-			return ocispec.Descriptor{}, ocispec.Manifest{}, fmt.Errorf(
-				"%s is not published in %s/%s (%w)",
-				project, repo.Reference.Registry, repo.Reference.Repository, err)
+			return ocispec.Descriptor{}, ocispec.Manifest{}, &NotPublishedError{
+				Project:  project,
+				Registry: repo.Reference.Registry,
+				Repo:     repo.Reference.Repository,
+				Err:      err,
+			}
 		}
 		return ocispec.Descriptor{}, ocispec.Manifest{}, fmt.Errorf("resolve %s v%s: %w", project, ver, err)
 	}

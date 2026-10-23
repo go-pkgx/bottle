@@ -761,24 +761,6 @@ func bothPlacesLooked(err error, project, osn, arch string) error {
 		project, osn, arch, DistBase, UpstreamDist, err)
 }
 
-// IsNotPublished reports whether err means this registry simply does not
-// carry the project, as opposed to a transient or authentication failure.
-//
-// ⛔ EXPORTED BECAUSE THE DISTINCTION IS THE ANSWER, and a caller outside
-// this package could not make it. A user asked for a package we had never
-// built and pkgx showed them ghcr's raw refusal:
-//
-//	pkgx: … is not published in ghcr.io/go-pkgx/packages/… :
-//	      response status code 403: denied: requested access to the
-//	      resource is denied
-//
-// which reads as a credentials problem and is not one. `pkgs request`
-// (go-pkgx/pkgx) then repeated the mistake in the tool written to explain
-// it: every error from ListTags became "could not ask the registry", so the
-// one case it exists for — never published — printed a 403 instead of a
-// report. The rule below already knew better; it was unreachable.
-func IsNotPublished(err error) bool { return repoAbsent(err) }
-
 // repoAbsent reports whether err signals that the OCI registry simply does not
 // carry the project (ghcr returns HTTP 404 with "name unknown: repository name
 // not known to registry"), as opposed to a transient or auth error that should
