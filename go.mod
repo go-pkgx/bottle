@@ -11,7 +11,7 @@ require (
 	github.com/ulikunitz/xz v0.5.17
 	github.com/zclconf/go-cty v1.19.0
 	gopkg.in/yaml.v3 v3.0.1
-	oras.land/oras-go/v2 v2.6.4
+	oras.land/oras-go/v2 v2.7.0
 )
 
 require (
