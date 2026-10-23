@@ -229,6 +229,31 @@ without the capability. Arguments are a closed alphabet (letters, digits,
 where a newline is a new directive and `%`, `$`, quotes and `;` all mean
 something.
 
+## "It is not here" is two states, and both are types
+
+A caller that wants to offer a next step — *ask for this to be published* —
+cannot act on prose, so the two ways a project can be unavailable each have
+a type:
+
+| | |
+|---|---|
+| `*NotPublishedError` | the registry does not carry the project **at all**. ghcr spells this as `403: denied` at the token endpoint for a repository that does not exist, which reads as a credentials fault and is not one |
+| `*NoBottleHereError` | the project is published, just not for **your** platform. It carries the versions that exist and the ones with no bottle, so the message stays the sentence the field reports settled on |
+
+`ProjectToRequest(err)` answers both with the project's name, and `""` for
+everything else. One call, because two predicates at the call site is how
+one of them comes to be forgotten — which is what happened:
+`*NotPublishedError` alone covers the *rare* half. Measured against the
+published `darwin/aarch64` catalogue on 2026-10-23, **567 of 1940 projects**
+had a recipe and no bottle, and for the length of one release
+`pkgx`'s "you can ask for this" hint could not see any of them.
+
+⛔ The prose predicate that preceded them is still here as
+`IsNotPublished`'s last resort, and it is **too wide once it leaves this
+package**: it matches `not found` anywhere in a message, and its first use
+outside fired on `command not found in the requested packages: true`, where
+the package was published and the *command* was missing.
+
 ## Where it is proven to work
 
 This package reads formats it did not write — ELF and Mach-O headers, OCI

@@ -1041,13 +1041,16 @@ func PickVersionForAll(project string, constraints []string, osn, arch string) (
 	// version" — and omitting is the one that leaves a sentence worth reading:
 	// what went wrong is the PLATFORM, and with nothing constrained that is
 	// the whole of it.
+	// ⛔ A TYPE, NOT THE SENTENCE IT PRINTS. The wording below is unchanged —
+	// both forms were settled by field reports — but a caller that wants to
+	// offer a next step cannot act on prose. This is the COMMON state (567 of
+	// 1940 projects on darwin/aarch64, 2026-10-23), and for one release the
+	// hint that names `pkgs request` could not see it. See NoBottleHereError.
 	if len(absent) > 0 {
-		if len(constraints) == 0 {
-			return Ver{}, fmt.Errorf("no version of %s is published for %s/%s (available: %s; not published here: %s)",
-				project, osn, arch, availableVersions(vs), strings.Join(absent, " "))
+		return Ver{}, &NoBottleHereError{
+			Project: project, OS: osn, Arch: arch,
+			Constraints: constraints, Available: vs, Absent: absent,
 		}
-		return Ver{}, fmt.Errorf("no version of %s satisfies %s AND is published for %s/%s (available: %s; satisfy but not published here: %s)",
-			project, quoteAll(constraints), osn, arch, availableVersions(vs), strings.Join(absent, " "))
 	}
 	if len(constraints) == 0 {
 		// Reachable only with no versions at all: with nothing constrained

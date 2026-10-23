@@ -3,6 +3,7 @@ package bottle
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // NotPublishedError says that THIS registry does not carry a project, and
@@ -53,4 +54,71 @@ func IsNotPublished(err error) bool {
 		return true
 	}
 	return repoAbsent(err)
+}
+
+// NoBottleHereError says the project IS published — just not anything this
+// platform can install.
+//
+// # WHY A SECOND TYPE, AND WHY IT IS THE COMMON ONE
+//
+// ⛔ NotPublishedError ALONE COVERED THE RARE HALF. It is returned when the
+// repository does not exist at all, which is what a brand-new package looks
+// like. The ordinary state is the other one: measured 2026-10-23 against the
+// published darwin/aarch64 catalogue, 567 of 1940 projects had a recipe and
+// no bottle — 29% of the pantry, against which `pkgx <project>` answered
+//
+//	no version of aerc-mail.org is published for darwin/aarch64
+//	(available: 0.22.0; not published here: 0.22.0)
+//
+// A good sentence and a dead end: it names no next step, and the hint that
+// exists to name one could not fire, because this error was a sentence and
+// not a type. Found by RUNNING the shipped binary over a list derived from
+// the catalogue — the unit test passed and the mutation was caught, and
+// neither could see that the covered case was the rare one.
+//
+// The fields are the message's own parts, so a caller that wants to say
+// something else does not have to parse the sentence back apart.
+type NoBottleHereError struct {
+	Project     string
+	OS, Arch    string
+	Constraints []string // what was asked for; empty means "any version"
+	Available   []Ver    // every version the pantry knows, oldest first
+	Absent      []string // of those, the ones with no bottle here
+}
+
+// Error keeps the two sentences the field reports settled on, verbatim.
+//
+// ⛔ NO CONSTRAINT MEANS THE CLAUSE IS OMITTED, not printed empty: reported
+// 2026-10-12, when `pkgx hugo version` produced "satisfies  AND is published
+// for", two spaces where the reason should be, blaming a constraint that did
+// not exist.
+func (e *NoBottleHereError) Error() string {
+	if len(e.Constraints) == 0 {
+		return fmt.Sprintf("no version of %s is published for %s/%s (available: %s; not published here: %s)",
+			e.Project, e.OS, e.Arch, availableVersions(e.Available), strings.Join(e.Absent, " "))
+	}
+	return fmt.Sprintf("no version of %s satisfies %s AND is published for %s/%s (available: %s; satisfy but not published here: %s)",
+		e.Project, quoteAll(e.Constraints), e.OS, e.Arch, availableVersions(e.Available), strings.Join(e.Absent, " "))
+}
+
+// ProjectToRequest names the project a caller could ask to have published,
+// for the errors that mean "there is nothing here you can install", and ""
+// for every other error.
+//
+// ⛔ ONE QUESTION, ONE ANSWER. The two states above differ in their data —
+// one has a registry and an HTTP refusal, the other has versions and a
+// platform — but a caller deciding whether to offer `pkgs request` is asking
+// the same thing of both. Two predicates at that call site is how one of
+// them comes to be forgotten, which is exactly what happened to the second
+// state for the length of one release.
+func ProjectToRequest(err error) string {
+	var nb *NoBottleHereError
+	if errors.As(err, &nb) {
+		return nb.Project
+	}
+	var np *NotPublishedError
+	if errors.As(err, &np) {
+		return np.Project
+	}
+	return ""
 }
