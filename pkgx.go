@@ -1142,6 +1142,21 @@ func publishedTagFor(project string, v Ver, osn, arch string) (string, bool, err
 // tagSpellings lists the tags that can denote this version, the one the listing
 // chose first. A glibc-flavored tag is left alone: it names one BUILD of a
 // version, and trimming it would name a different artifact.
+//
+// ⛔ A SHORTER SPELLING IS ONLY THE SAME VERSION WHEN WHAT IT DROPS IS ZERO.
+// "1.35.0" is also spelled "1.35"; "26.8.1" is NOT also spelled "26.8", and
+// "26.8.0" is a different release of the software. Until 2026-10-22 this
+// built both, and the consequence was measured on the published registry:
+//
+//	nodejs.org 26.8.1 has no linux/x86-64 bottle; 26.8.0 does.
+//	publishedTagFor(26.8.1, linux/x86-64) tried "26.8.0", got a hit, and
+//	answered yes — so `bk catalog` recorded 26.8.1 as the version that
+//	platform carries. The published linux/x86-64 catalogue then advertised
+//	a node nobody could install, and the 26.8.0 it does have was unreachable.
+//
+// The same function answers "is this lock's pin published" (lockpublished),
+// where a yes about a NEIGHBOURING version is worse: a lock exists to say
+// that nothing moved.
 func tagSpellings(v Ver) []string {
 	first := v.tag()
 	if v.Tag != "" {
@@ -1150,12 +1165,18 @@ func tagSpellings(v Ver) []string {
 	out := []string{first}
 	seen := map[string]bool{first: true}
 	nums := v.Nums
-	// "1.35.0" also spelled "1.35" and "1"; "1.2" also spelled "1.2.0".
 	for n := len(nums); n > 0; n-- {
+		// Dropping a non-zero component names another version, not another
+		// spelling of this one.
+		if !allZero(nums[n:]) {
+			continue
+		}
 		parts := make([]string, n)
 		for i := 0; i < n; i++ {
 			parts[i] = strconv.Itoa(nums[i])
 		}
+		// The `.0` extension is the same version written longer ("1.2" is
+		// "1.2.0"), so it rides along with a truncation that was legal.
 		for _, cand := range []string{strings.Join(parts, "."), strings.Join(parts, ".") + ".0"} {
 			if !seen[cand] {
 				seen[cand] = true
@@ -1164,6 +1185,15 @@ func tagSpellings(v Ver) []string {
 		}
 	}
 	return out
+}
+
+func allZero(nums []int) bool {
+	for _, n := range nums {
+		if n != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // splitComparators cuts a conjunction into its comparator-led parts. A new part
