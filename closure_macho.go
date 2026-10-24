@@ -134,7 +134,7 @@ var storeRefRE = regexp.MustCompile(`^@rpath/(.+?)/(abi-([^/]+)|v[0-9][^/]*)/(.+
 var (
 	machoProvider = provideMachoSoname
 	machoVersions = FetchVersions
-	machoInstall  = Install
+	machoInstall  = InstallFor
 )
 
 // want is one reference that does not resolve, reduced to what would fix it.
@@ -221,7 +221,7 @@ func unresolvedRefs(prefixes []string, dir string) []want {
 // and one version owns it. That case is reported rather than papered over,
 // because the fix is to rebuild the consumer against the ABI line, and a
 // warning at install time is a diagnosis where dyld's is a crash.
-func completeMachO(closure []Resolved, dir string) ([]Resolved, error) {
+func completeMachO(closure []Resolved, dir, osn, arch string) ([]Resolved, error) {
 	installedVer := map[string]bool{}
 	for _, r := range closure {
 		installedVer[r.Project+"@"+r.Version.Raw] = true
@@ -281,7 +281,7 @@ func provideMachoSoname(w want, dir string) (Resolved, bool) {
 		if !strings.Contains(","+abiAnnotations(w.project, v.tag(), osn, arch)[ABIProvidesAnnotation]+",", ","+w.soname+",") {
 			continue
 		}
-		if _, err := machoInstall(r, dir); err != nil {
+		if _, err := machoInstall(r, dir, osn, arch); err != nil {
 			warn("cannot install %s %s for %s: %v", w.project, v.Raw, w.soname, err)
 			continue
 		}

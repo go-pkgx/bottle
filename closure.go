@@ -336,20 +336,52 @@ func availableSonames(prefixes []string) map[string]bool {
 // package.yml graphs omit — until every NEEDED soname is satisfied. This makes
 // the closure complete enough to run on a `FROM scratch` image.
 func CompleteClosure(roots map[string]string, dir string) ([]Resolved, error) {
-	closure, err := ResolveClosure(roots)
+	osn, arch := HostSlug()
+	return CompleteClosureFor(roots, dir, osn, arch)
+}
+
+// CompleteClosureFor is CompleteClosure for an EXPLICIT pkgx os/arch slug:
+// the version pick, the dependency read, every install and the choice of
+// binary format all happen in the TARGET platform's terms.
+//
+// # WHY IT HAD TO EXIST
+//
+// ⛔ AN AUDIT THAT CAN ONLY ASK ABOUT ITS OWN MACHINE COVERS ONE PLATFORM
+// OF SIX. `bk unresolved` reads every reference in an installed closure
+// and reports the ones the store cannot answer; wired into CI as
+// sonames.yml it found 967 unresolvable references over 259 of the 1407
+// bottled projects on linux/x86-64 (2026-10-24). The other five platforms
+// had never been asked, because this function resolved and installed for
+// the host and nothing else could be said honestly.
+//
+// That is the shape vulnscan.yml spent two months in: a coverage gap
+// living in a comment. ResolveClosureFor and InstallFor were already
+// platform-explicit — this is the piece between them that was not.
+//
+// ⛔ CompleteClosure IS NOW THIS FUNCTION AT HostSlug(), so the host path
+// is identical BY CONSTRUCTION rather than by a second reading of the
+// same logic. The existing closure tests passing unchanged is the
+// evidence, including the ones that swap the `goos` seam: HostSlug reads
+// it, so a test pretending to be Windows still reaches the Windows path.
+func CompleteClosureFor(roots map[string]string, dir, osn, arch string) ([]Resolved, error) {
+	closure, err := ResolveClosureFor(roots, osn, arch)
 	if err != nil {
 		return nil, err
 	}
 	for _, r := range closure {
-		if _, err := Install(r, dir); err != nil {
+		if _, err := InstallFor(r, dir, osn, arch); err != nil {
 			return nil, err
 		}
 	}
-	switch goos() {
+	// ⛔ THE TARGET'S OS, NOT THE HOST'S. This is the one line here that is
+	// a behaviour change rather than a pass-through: reading a linux
+	// closure from a mac has to take the ELF path, and taking the host's
+	// would silently complete nothing and report a clean closure.
+	switch osn {
 	case "linux":
-		return completeELF(closure, dir)
+		return completeELF(closure, dir, osn, arch)
 	case "darwin":
-		return completeMachO(closure, dir)
+		return completeMachO(closure, dir, osn, arch)
 	}
 	return closure, nil
 }
@@ -362,7 +394,7 @@ func CompleteClosure(roots map[string]string, dir string) ([]Resolved, error) {
 //
 // Mach-O cannot work this way: a reference is a PATH, not a name to search
 // for, so the darwin half is completeMachO and the two share only the shape.
-func completeELF(closure []Resolved, dir string) ([]Resolved, error) {
+func completeELF(closure []Resolved, dir, osn, arch string) ([]Resolved, error) {
 	have := map[string]bool{}
 	installedVer := map[string]bool{} // "project@version" already in the closure
 	for _, r := range closure {
@@ -386,7 +418,7 @@ func completeELF(closure []Resolved, dir string) ([]Resolved, error) {
 			}
 		}
 		if len(implicit) > 0 {
-			more, err := ResolveClosure(implicit)
+			more, err := ResolveClosureFor(implicit, osn, arch)
 			if err != nil {
 				return nil, err
 			}
@@ -394,7 +426,7 @@ func completeELF(closure []Resolved, dir string) ([]Resolved, error) {
 				if have[r.Project] {
 					continue
 				}
-				if _, err := Install(r, dir); err != nil {
+				if _, err := InstallFor(r, dir, osn, arch); err != nil {
 					return nil, err
 				}
 				have[r.Project] = true
@@ -426,7 +458,7 @@ func completeELF(closure []Resolved, dir string) ([]Resolved, error) {
 					"what needs it will load only where a driver is installed", soname)
 				continue
 			}
-			r, ok := provideSoname(soname, dir)
+			r, ok := provideSoname(soname, dir, osn, arch)
 			if !ok {
 				continue
 			}
@@ -458,13 +490,13 @@ func completeELF(closure []Resolved, dir string) ([]Resolved, error) {
 // carry the provider at all (perl's libcrypt.so.1 was simply absent from a
 // local cache, and the silence cost an hour), and "no version provides it"
 // means the provider moved past that ABI.
-func provideSoname(soname, dir string) (Resolved, bool) {
+func provideSoname(soname, dir, osn, arch string) (Resolved, bool) {
 	proj := projectForSoname(soname)
 	if proj == "" {
 		warn("%s is NEEDED but no pkgx project is mapped to that soname", soname)
 		return Resolved{}, false
 	}
-	r, ok, err := installProvidingSoname(proj, soname, dir)
+	r, ok, err := installProvidingSoname(proj, soname, dir, osn, arch)
 	switch {
 	case err != nil:
 		warn("cannot provide %s from %s: %v", soname, proj, err)
@@ -481,7 +513,7 @@ func provideSoname(soname, dir string) (Resolved, bool) {
 // that matching bottle. ok is false if no examined version ships the soname.
 // Sonames carry an ABI version a project's latest release may have moved past,
 // so "latest" is not always the right bottle for a specific soname.
-func installProvidingSoname(project, soname, dir string) (Resolved, bool, error) {
+func installProvidingSoname(project, soname, dir, osn, arch string) (Resolved, bool, error) {
 	vs, err := FetchVersions(project)
 	if err != nil {
 		return Resolved{}, false, err
@@ -494,7 +526,7 @@ func installProvidingSoname(project, soname, dir string) (Resolved, bool, error)
 		}
 		tried++
 		r := Resolved{project, v}
-		if _, err := Install(r, dir); err != nil {
+		if _, err := InstallFor(r, dir, osn, arch); err != nil {
 			continue // no bottle for this version/platform — try the next one
 		}
 		prefix := filepath.Join(dir, r.Project, "v"+r.Version.Raw)

@@ -240,7 +240,10 @@ func TestCompleteMachOHoldsBothABILines(t *testing.T) {
 		return Resolved{"gnome.org/libxml2", Ver{Raw: "2.15.4"}}, true
 	}
 
-	got, err := completeMachO(closure, dir)
+	// darwin/aarch64 explicitly, not the host: this exercises the Mach-O
+	// completer, and naming its platform is what lets the test say the
+	// same thing on a linux runner as on a mac.
+	got, err := completeMachO(closure, dir, "darwin", "aarch64")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +282,7 @@ func TestCompleteMachODiagnosesTheMajorDirectory(t *testing.T) {
 	writeMachO(t, filepath.Join(dir, "open-mpi.org/hwloc/v2.15.0/bin/lstopo"),
 		mcmd{lcLoadDylib, "@rpath/gnome.org/libxml2/v2/lib/libxml2.16.dylib"},
 	)
-	if _, err := completeMachO([]Resolved{{"open-mpi.org/hwloc", Ver{Raw: "2.15.0"}}}, dir); err != nil {
+	if _, err := completeMachO([]Resolved{{"open-mpi.org/hwloc", Ver{Raw: "2.15.0"}}}, dir, "darwin", "aarch64"); err != nil {
 		t.Fatal(err)
 	}
 	if len(said) != 1 || !strings.Contains(said[0], "libxml2.16.dylib") ||
@@ -307,7 +310,7 @@ func TestProvideMachoSonameAsksTheManifest(t *testing.T) {
 		return nil // published before the annotation existed
 	}
 	var installed []string
-	machoInstall = func(r Resolved, _ string) (bool, error) {
+	machoInstall = func(r Resolved, _, _, _ string) (bool, error) {
 		installed = append(installed, r.Version.Raw)
 		return true, nil
 	}
