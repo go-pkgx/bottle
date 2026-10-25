@@ -148,8 +148,9 @@ func TestInstallProvidingSoname(t *testing.T) {
 		},
 	})()
 	dir := t.TempDir()
+	osn, arch := HostSlug()
 	// The walk must skip 2.15.3 (ships .so.16) and fall back to 2.13.9 (.so.2).
-	r, ok, err := installProvidingSoname("xml.org/libxml2", "libxml2.so.2", dir)
+	r, ok, err := installProvidingSoname("xml.org/libxml2", "libxml2.so.2", dir, osn, arch)
 	if err != nil || !ok {
 		t.Fatalf("expected libxml2.so.2 provider, ok=%v err=%v", ok, err)
 	}
@@ -157,11 +158,11 @@ func TestInstallProvidingSoname(t *testing.T) {
 		t.Errorf("picked v%s, want 2.13.9", r.Version.Raw)
 	}
 	// a soname no version provides -> ok=false, no error.
-	if _, ok, err := installProvidingSoname("xml.org/libxml2", "libnope.so.9", dir); ok || err != nil {
+	if _, ok, err := installProvidingSoname("xml.org/libxml2", "libnope.so.9", dir, osn, arch); ok || err != nil {
 		t.Errorf("absent soname: ok=%v err=%v, want false/nil", ok, err)
 	}
 	// unknown project -> fetchVersions error surfaces.
-	if _, _, err := installProvidingSoname("no.org/x", "libx.so.1", dir); err == nil {
+	if _, _, err := installProvidingSoname("no.org/x", "libx.so.1", dir, osn, arch); err == nil {
 		t.Error("expected error for unknown project")
 	}
 }
@@ -198,16 +199,17 @@ func TestProvideSonameWarns(t *testing.T) {
 	Warn = func(msg string) { said = append(said, msg) }
 	defer func() { Warn = nil }()
 
+	osn, arch := HostSlug()
 	// 1. no project is mapped to the soname at all
-	if _, ok := provideSoname("libwhatever.so.9", t.TempDir()); ok {
+	if _, ok := provideSoname("libwhatever.so.9", t.TempDir(), osn, arch); ok {
 		t.Error("unmapped soname must not resolve")
 	}
 	// 2. the provider is mapped but the registry in use does not carry it
-	if _, ok := provideSoname("libcrypt.so.1", t.TempDir()); ok {
+	if _, ok := provideSoname("libcrypt.so.1", t.TempDir(), osn, arch); ok {
 		t.Error("absent provider must not resolve")
 	}
 	// 3. the provider is carried but no version ships that soname
-	if _, ok := provideSoname("libz.so.1", t.TempDir()); ok {
+	if _, ok := provideSoname("libz.so.1", t.TempDir(), osn, arch); ok {
 		t.Error("soname absent from every version must not resolve")
 	}
 	for i, want := range []string{
@@ -221,7 +223,7 @@ func TestProvideSonameWarns(t *testing.T) {
 	}
 	// A nil Warn is the library default and must stay silent, not panic.
 	Warn = nil
-	if _, ok := provideSoname("libwhatever.so.9", t.TempDir()); ok {
+	if _, ok := provideSoname("libwhatever.so.9", t.TempDir(), osn, arch); ok {
 		t.Error("unmapped soname must not resolve without a Warn either")
 	}
 }
@@ -244,6 +246,65 @@ func TestCompleteClosure(t *testing.T) {
 		}
 	} else if len(closure) != 1 {
 		t.Errorf("darwin closure = %d, want 1", len(closure))
+	}
+}
+
+// ⛔ THE TARGET'S OS DECIDES, NOT THE HOST'S — and that is the one line of
+// CompleteClosureFor that is a behaviour change rather than a pass-through.
+//
+// Everything else there is ResolveClosureFor and InstallFor in place of
+// their host-bound siblings, so the host path is identical by
+// construction and the rest of this file passing says so. This is the
+// part that needs its own evidence.
+//
+// It matters because an audit that reads a linux closure from a mac must
+// take the ELF path. Taking the host's would complete nothing, find every
+// soname satisfied — because it never looked — and report a clean
+// closure. A wrong answer that looks like good news.
+//
+// The host here claims to be darwin while the target is linux, so the
+// glibc that only the ELF completer adds is the witness: 2 entries means
+// the ELF path ran, 1 means the host's choice won.
+func TestTheTargetsFormatDecidesNotTheHosts(t *testing.T) {
+	// linux FIRST, so the fake registry serves linux paths and the target's
+	// installs resolve; the host identity is changed afterwards.
+	setGoos(t, "linux")
+	_, arch := HostSlug()
+	defer fakeServer(t, map[string]fakePkg{
+		"acme.org/tool": {versions: []string{"1.0.0"}, yaml: "provides:\n  - bin/tool\n", files: map[string]string{"bin/tool": "x"}},
+		"gnu.org/glibc": {versions: []string{"2.44.0"}, yaml: "provides:\n  - bin/ldd\n", files: map[string]string{"lib/glibc-2.44/libc.so.6": "x"}},
+	})()
+	setGoos(t, "darwin") // the host is now something else entirely
+
+	closure, err := CompleteClosureFor(map[string]string{"acme.org/tool": "*"}, t.TempDir(), "linux", arch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(closure) != 2 {
+		t.Fatalf("closure = %d entry(ies), want 2 (tool+glibc): the host's darwin chose the format, so the ELF completer never ran: %+v", len(closure), closure)
+	}
+}
+
+// And the other direction, which is the quiet one: a platform with no
+// completer at all returns the declared closure untouched rather than
+// erroring. `CompleteClosureFor(..., "windows", ...)` is a real call —
+// the registry publishes windows/x86-64 — and it must not take the host's
+// ELF path and start pulling glibc into a windows closure.
+func TestAPlatformWithNoCompleterIsLeftAlone(t *testing.T) {
+	setGoos(t, "windows")
+	_, arch := HostSlug()
+	defer fakeServer(t, map[string]fakePkg{
+		"acme.org/tool": {versions: []string{"1.0.0"}, yaml: "provides:\n  - bin/tool\n", files: map[string]string{"bin/tool": "x"}},
+		"gnu.org/glibc": {versions: []string{"2.44.0"}, yaml: "provides:\n  - bin/ldd\n", files: map[string]string{"lib/glibc-2.44/libc.so.6": "x"}},
+	})()
+	setGoos(t, "linux") // a linux host asking about windows
+
+	closure, err := CompleteClosureFor(map[string]string{"acme.org/tool": "*"}, t.TempDir(), "windows", arch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(closure) != 1 {
+		t.Errorf("closure = %d entry(ies), want 1: the host's linux pulled glibc into a windows closure: %+v", len(closure), closure)
 	}
 }
 

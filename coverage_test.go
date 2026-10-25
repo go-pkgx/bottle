@@ -978,7 +978,8 @@ func TestInstallProvidingSonameMaxTry(t *testing.T) {
 		"many.org/lib": {versions: vers, yaml: "provides:\n  - bin/x\n", files: map[string]string{"bin/x": "x"}},
 	})()
 	// no version ships the soname -> the walk bails at the maxTry bound.
-	if _, ok, err := installProvidingSoname("many.org/lib", "libnope.so.9", t.TempDir()); ok || err != nil {
+	hostOS, hostArch := HostSlug()
+	if _, ok, err := installProvidingSoname("many.org/lib", "libnope.so.9", t.TempDir(), hostOS, hostArch); ok || err != nil {
 		t.Errorf("maxTry walk: ok=%v err=%v, want false/nil", ok, err)
 	}
 }
@@ -992,7 +993,8 @@ func TestInstallProvidingSonameInstallSkip(t *testing.T) {
 			filesByVer: map[string]map[string]string{"1.0.0": {"lib/libx.so.2": "x"}},
 		},
 	})()
-	r, ok, err := installProvidingSoname("drift.org/lib", "libx.so.2", t.TempDir())
+	hostOS, hostArch := HostSlug()
+	r, ok, err := installProvidingSoname("drift.org/lib", "libx.so.2", t.TempDir(), hostOS, hostArch)
 	if err != nil || !ok || r.Version.Raw != "1.0.0" {
 		t.Fatalf("expected fallback to 1.0.0: r=%+v ok=%v err=%v", r, ok, err)
 	}

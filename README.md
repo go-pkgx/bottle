@@ -254,6 +254,39 @@ package**: it matches `not found` anywhere in a message, and its first use
 outside fired on `command not found in the requested packages: true`, where
 the package was published and the *command* was missing.
 
+## A closure can be completed for a platform you are not on
+
+`CompleteClosure` resolves a package's declared closure, installs it, then
+reads the bottles' own `DT_NEEDED` (or Mach-O load commands) and pulls
+whatever provides each unsatisfied soname — the implicit glibc/gcc
+libraries and the undeclared ones that `package.yml` graphs omit — until
+the closure is complete enough to run on a `FROM scratch` image.
+
+**`CompleteClosureFor` does that for an explicit `os/arch`**, so one
+machine can audit all of them:
+
+```go
+closure, err := bottle.CompleteClosureFor(roots, dir, "linux", "x86-64")
+```
+
+⛔ **Why it had to exist.** `bk unresolved` reports every reference an
+installed closure cannot answer; wired into CI it found **967
+unresolvable references over 259 of 1407 bottled projects** on
+linux/x86-64. The other five platforms had never been asked, because this
+function resolved and installed for the host and nothing else could be
+said honestly — the same shape as a CVE lane that scanned two platforms
+of six for two months.
+
+⛔ **The target's OS picks the binary format**, and that is the only line
+of it that is a behaviour change rather than a pass-through to
+`ResolveClosureFor` and `InstallFor`. Reading a linux closure from a mac
+has to take the ELF path; taking the host's would complete nothing, find
+every soname satisfied *because it never looked*, and report a clean
+closure — a wrong answer that looks like good news. Two tests pin it in
+both directions, and `CompleteClosure` is now exactly
+`CompleteClosureFor(…, HostSlug())`, so the host path is identical by
+construction rather than by a second reading of the same logic.
+
 ## Where it is proven to work
 
 This package reads formats it did not write — ELF and Mach-O headers, OCI
