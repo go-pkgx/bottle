@@ -2201,8 +2201,13 @@ func platformBlock(v any, k, osn, arch string) (map[string]any, bool) {
 	switch k {
 	case osn, osn + "/" + arch, arch:
 		return m, true
-	case "linux", "darwin", "x86-64", "aarch64",
-		"linux/x86-64", "linux/aarch64", "darwin/x86-64", "darwin/aarch64":
+	case "x86-64", "aarch64", "wasm":
+		return nil, true // another arch's block: applies to nobody here
+	}
+	// Every OS platformKeys names, bare or as an os/arch pair, is a platform
+	// block too: a recipe's `wasip1:` or `windows/x86-64:` block was read as a
+	// plain value on a linux host because only linux and darwin were listed.
+	if isPlatformKey(k) {
 		return nil, true // another platform's block: applies to nobody here
 	}
 	return nil, false
