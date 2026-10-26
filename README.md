@@ -302,6 +302,12 @@ and a compiler cannot see it. CI therefore does not stop at cross-compiling: it
 | `test (js/wasm, node)` | node 24. Go's js/wasm port takes `net/http` through the host's `fetch()` and the filesystem through the host's `fs` — two runtimes no other lane exercises. A browser that installs a signed bottle into its own store runs this code |
 | `test (wasip1/wasm, wasmtime)` | a *different* wasm port with a different syscall surface: no network at all, and a filesystem only where one is granted. A package that installs bottles has to know which of the two it is on |
 
+A bottle for the `wasip1/wasm` platform is published with the OCI platform
+`os=wasip1, architecture=wasm` (the Docker+Wasm / CNCF wasm-oci-artifact
+spelling; only `x86-64` and `aarch64` are renamed), and a recipe may scope a
+block to `wasip1:`, `windows:` or `js:` without it being read as a plain value
+on another host.
+
 `s390x` is in the list because it is big-endian and nothing else here is. The
 build matrix adds linux/darwin on amd64 and arm64 and both wasm targets, so
 everything that runs also compiles with `CGO_ENABLED=0`.
