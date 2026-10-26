@@ -304,6 +304,19 @@ includes `@rpath/..0`, which refuted the first version of the test's own
 assertion in 0.16s — `..0` is an ordinary filename, and a hand-rolled
 re-derivation of `IsLocal` was wrong where `IsLocal` was right.
 
+⛔ **And since v0.59.0 `InstallFor` checks the name it writes under.** It
+builds `<pkgxDir>/<project>/v<version>`, and was safe only by *order*: the
+fetch below it goes through `OCIClient.repository`, which validates. But the
+`os.Stat` deciding "already present" runs first, so a project of `../x`
+naming a directory that exists returned `(false, nil)` — this function's way
+of saying *already installed*. The caller was told the work was done, nothing
+was installed, and the evidence was a directory outside the store. `Resolved`
+is an exported struct with exported fields, so a caller can fill it without
+passing through a resolver or a catalogue; the order of two unrelated checks
+inside one function is not a boundary. Measured before adding it: the
+upstream pantry's 1929 recipes carry 6381 dependency keys and every one
+passes, so it rejects nothing that exists.
+
 ## Where it is proven to work
 
 This package reads formats it did not write — ELF and Mach-O headers, OCI
