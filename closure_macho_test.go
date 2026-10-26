@@ -362,6 +362,99 @@ func TestProvideMachoSonameWhenTheLookupFails(t *testing.T) {
 // A file that CLAIMS to be a Mach-O and cannot be read is said out loud: what
 // it loads is then unknown rather than absent, and an unknown reference is how
 // a closure gets declared complete while it is not. A README is not a finding.
+// ⛔ A REFERENCE THIS CANNOT MODEL USED TO BE SKIPPED IN SILENCE, and the
+// silence is what let it reach 1266. Measured 2026-10-26 on the first
+// full darwin/aarch64 sweep: of 3003 unresolvable references, 1266 are
+//
+//	@rpath/libabsl_base.2608.0.0.dylib
+//
+// with no project directory, so storeRefRE cannot match and no want is
+// built. `bk unresolved` counts them — it stats every @rpath reference —
+// while this skipped them, so the auditor and the resolver disagreed
+// about 42% of a platform's backlog with not one line in the log.
+//
+// The warning does not resolve them (go-pkgx/bottle#166). It stops the
+// gap being invisible.
+func TestABareReferenceIsNamedRatherThanSkippedInSilence(t *testing.T) {
+	oldW := Warn
+	defer func() { Warn = oldW }()
+	var said []string
+	Warn = func(m string) { said = append(said, m) }
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "top.org", "v1")
+	if err := os.MkdirAll(filepath.Join(prefix, "lib"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The one that must be named: @rpath, absent from the store, and no
+	// project directory to look a provider up by.
+	//
+	// Beside it, the two that must stay quiet — a system library, which is
+	// the host's business, and a store-shaped reference, which becomes a
+	// want and is reported by the machinery that handles it.
+	writeMachO(t, filepath.Join(prefix, "bin", "tool"),
+		mcmd{lcLoadDylib, "@rpath/libabsl_base.2608.0.0.dylib"},
+		mcmd{lcLoadDylib, "/usr/lib/libSystem.B.dylib"},
+		mcmd{lcLoadDylib, "@rpath/other.org/v2/lib/libother.dylib"},
+	)
+
+	wants := unresolvedRefs([]string{prefix}, dir)
+
+	if len(said) != 1 {
+		t.Fatalf("want exactly one diagnostic, got %d: %v", len(said), said)
+	}
+	for _, s := range []string{"libabsl_base.2608.0.0.dylib", "names no project directory"} {
+		if !strings.Contains(said[0], s) {
+			t.Errorf("the diagnostic does not say %q: %s", s, said[0])
+		}
+	}
+	// ⛔ AND IT IS STILL NOT A WANT. Naming it must not quietly turn it
+	// into something provideMachoSoname will be asked about with an empty
+	// project — that would trade a silent skip for a confident wrong
+	// lookup.
+	for _, w := range wants {
+		if strings.Contains(w.ref, "libabsl_base") {
+			t.Errorf("a bare reference became a want: %+v", w)
+		}
+	}
+	// The store-shaped one did become a want, so the quiet above is the
+	// quiet of being handled, not of being dropped too.
+	if len(wants) != 1 || wants[0].project != "other.org" {
+		t.Errorf("the store-shaped reference did not become a want: %+v", wants)
+	}
+}
+
+// A satisfied bare reference says nothing: the file is there, so there is
+// no gap to name. Without this the warning would fire on every closure
+// that happens to resolve its siblings by bare name.
+func TestABareReferenceThatResolvesIsSilent(t *testing.T) {
+	oldW := Warn
+	defer func() { Warn = oldW }()
+	var said []string
+	Warn = func(m string) { said = append(said, m) }
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "top.org", "v1")
+	if err := os.MkdirAll(filepath.Join(prefix, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// @rpath is the store root here, so this is the file the reference
+	// names — present, therefore nothing to report.
+	if err := os.WriteFile(filepath.Join(dir, "libthere.1.dylib"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeMachO(t, filepath.Join(prefix, "bin", "tool"),
+		mcmd{lcLoadDylib, "@rpath/libthere.1.dylib"},
+	)
+
+	if wants := unresolvedRefs([]string{prefix}, dir); len(wants) != 0 {
+		t.Errorf("wants = %+v, want none", wants)
+	}
+	if len(said) != 0 {
+		t.Errorf("a satisfied reference was reported: %v", said)
+	}
+}
+
 func TestUnresolvedRefsNamesAMachoItCannotRead(t *testing.T) {
 	oldW := Warn
 	defer func() { Warn = oldW }()
