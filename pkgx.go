@@ -1749,6 +1749,27 @@ func Install(r Resolved, pkgxDir string) (bool, error) {
 // is identical whatever the host: only the bottle fetched differs, so a builder
 // can stage a linux/aarch64 rootfs from a darwin/arm64 machine.
 func InstallFor(r Resolved, pkgxDir, osn, arch string) (bool, error) {
+	// ⛔ THE NAME BUILDS A PATH THAT IS WRITTEN TO, so it is checked here.
+	//
+	// Until now this was safe only by ORDER: fetchBottle below goes through
+	// OCIClient.repository, which validates, so a `..` would have failed at
+	// the fetch. But the os.Stat on the next line happens FIRST — and for a
+	// project of `../..` naming a directory that exists, it returns
+	// (false, nil), which this function's contract reads as "already
+	// present". A caller would be told the bottle is installed, having
+	// installed nothing, on the strength of a directory outside the store.
+	//
+	// Resolved is an exported struct with exported fields, so a caller can
+	// fill it by hand without passing through a resolver or a catalogue —
+	// both of which already validate. Depending on the order of two
+	// unrelated checks inside one function is not a boundary.
+	//
+	// Measured before adding it: the upstream pantry's 1929 recipes carry
+	// 6381 dependency keys and every one passes, so this rejects nothing that
+	// exists today.
+	if err := ValidateProjectName(r.Project); err != nil {
+		return false, err
+	}
 	prefix := filepath.Join(pkgxDir, r.Project, "v"+r.Version.Raw)
 	if st, err := os.Stat(prefix); err == nil && st.IsDir() {
 		return false, nil // already present
