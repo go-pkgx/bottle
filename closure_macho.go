@@ -129,6 +129,28 @@ func indexZero(b []byte) int {
 // that second segment is the only reliable terminator.
 var storeRefRE = regexp.MustCompile(`^@rpath/(.+?)/(abi-([^/]+)|v[0-9][^/]*)/(.+)$`)
 
+// storeRel is the store-relative path an @rpath reference names, and false if
+// the reference does not stay inside the store.
+//
+// ⛔ THE REFERENCE IS UNTRUSTED. It is read from the load commands of a
+// downloaded Mach-O, so `@rpath/../../../../etc/passwd` is a thing a bottle
+// can carry. The caller stats <dir>/<rel> and treats an existing file as
+// "already satisfied" — so without this, a bottle could point at any path the
+// process can see and have its closure declared complete on the strength of a
+// file that is not a library and is not in the store.
+//
+// filepath.IsLocal is the stdlib predicate for exactly this: it is false for
+// an absolute path, for one that escapes with .., and for a Windows reserved
+// name. An allowlist, like ValidateProjectName beside it, because a denylist
+// of dangerous shapes inherits the blind spots of whoever wrote it.
+func storeRel(ref string) (string, bool) {
+	rel := filepath.FromSlash(strings.TrimPrefix(ref, "@rpath/"))
+	if !filepath.IsLocal(rel) {
+		return "", false
+	}
+	return rel, true
+}
+
 // Seams: the three things below that need a network, so the repair loop is
 // testable without one.
 var (
@@ -183,7 +205,13 @@ func unresolvedRefs(prefixes []string, dir string) []want {
 				if !strings.HasPrefix(ref, "@rpath/") {
 					continue // /usr/lib and the system frameworks are the host's
 				}
-				if _, serr := os.Stat(filepath.Join(dir, filepath.FromSlash(strings.TrimPrefix(ref, "@rpath/")))); serr == nil {
+				rel, inStore := storeRel(ref)
+				if !inStore {
+					warn("%s is NEEDED and names a path OUTSIDE the store, so it is not "+
+						"something a closure can satisfy; ignoring it", ref)
+					continue
+				}
+				if _, serr := os.Stat(filepath.Join(dir, rel)); serr == nil {
 					continue
 				}
 				m := storeRefRE.FindStringSubmatch(ref)
@@ -214,6 +242,17 @@ func unresolvedRefs(prefixes []string, dir string) []want {
 					// which is the part that let it reach 1266.
 					warn("%s is NEEDED, is not in the store, and names no project directory — "+
 						"this cannot look for a provider, so it will not resolve", ref)
+					continue
+				}
+				// ⛔ THE PROJECT COMES OUT OF A DOWNLOADED BINARY. m[1] is
+				// whatever the load command happened to say, and it goes on to
+				// name a registry repository (FetchVersions) and a store path
+				// (InstallFor builds <dir>/<project>/v<version>). projectname.go
+				// says the check "lives where the name is USED, not where a
+				// person typed it" — and this use site did not have it.
+				if err := ValidateProjectName(m[1]); err != nil {
+					warn("%s names %q as its project, which cannot be used as one (%v), "+
+						"so this will not look for a provider", ref, m[1], err)
 					continue
 				}
 				w := want{project: m[1], soname: m[3], ref: ref, abiLine: m[3] != ""}

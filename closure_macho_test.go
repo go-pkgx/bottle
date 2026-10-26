@@ -455,6 +455,71 @@ func TestABareReferenceThatResolvesIsSilent(t *testing.T) {
 	}
 }
 
+// ⛔ A LOAD COMMAND IS INPUT FROM A STRANGER, and these two go somewhere.
+//
+// The reference decides the path that is stat'd to call it "already
+// satisfied", and the project it names becomes a registry repository
+// (FetchVersions) and a store path written to (InstallFor builds
+// <dir>/<project>/v<version>). Neither was checked.
+//
+// This drives unresolvedRefs itself rather than the two helpers, because the
+// question is not "does the rule work" but "is the rule CALLED" — the fuzz
+// target next door asserts the rule and would pass with both guards deleted.
+func TestUnresolvedRefsRefusesWhatLeavesTheStore(t *testing.T) {
+	oldW := Warn
+	defer func() { Warn = oldW }()
+	var said []string
+	Warn = func(m string) { said = append(said, m) }
+
+	dir := t.TempDir()
+	prefix := filepath.Join(dir, "top.org", "v1")
+	if err := os.MkdirAll(filepath.Join(prefix, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A file outside the store that the escaping reference would find. Its
+	// existence is the point: without the guard the stat succeeds and the
+	// reference is passed over as "satisfied" by a file that is neither a
+	// library nor in the store.
+	outside := filepath.Join(dir, "..", "outside.dylib")
+	if err := os.WriteFile(outside, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(outside)
+
+	writeMachO(t, filepath.Join(prefix, "bin", "tool"),
+		mcmd{lcLoadDylib, "@rpath/../outside.dylib"},
+		mcmd{lcLoadDylib, "@rpath/../../../../etc/passwd"},
+		// Local, and the regex matches, but "evil project" is not a usable
+		// project name — a space is not a project rune.
+		mcmd{lcLoadDylib, "@rpath/evil project/v1/lib/libx.dylib"},
+		// The control: ordinary, and must still become a want, or a guard
+		// that refuses everything would pass this test just as quietly.
+		mcmd{lcLoadDylib, "@rpath/good.org/v2/lib/libgood.dylib"},
+	)
+
+	wants := unresolvedRefs([]string{prefix}, dir)
+
+	if len(wants) != 1 || wants[0].project != "good.org" {
+		t.Fatalf("want exactly the good.org want, got %+v", wants)
+	}
+	for _, w := range wants {
+		if err := ValidateProjectName(w.project); err != nil {
+			t.Errorf("a want carries project %q: %v", w.project, err)
+		}
+	}
+	// Each refusal is SAID. A silent skip is the failure mode this family
+	// already paid for once, at 1266 references.
+	joined := strings.Join(said, "\n")
+	for _, want := range []string{
+		"outside.dylib", "etc/passwd", "OUTSIDE the store",
+		"evil project", "cannot be used as one",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the diagnostics do not mention %q:\n%s", want, joined)
+		}
+	}
+}
+
 func TestUnresolvedRefsNamesAMachoItCannotRead(t *testing.T) {
 	oldW := Warn
 	defer func() { Warn = oldW }()
