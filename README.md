@@ -287,6 +287,23 @@ both directions, and `CompleteClosure` is now exactly
 `CompleteClosureFor(…, HostSlug())`, so the host path is identical by
 construction rather than by a second reading of the same logic.
 
+⛔ **A load command is input from a stranger.** The `@rpath` references this
+reads come out of bottles that were *downloaded*, and both halves of one go
+somewhere: the reference becomes the path that is stat'd to decide a reference
+is already satisfied, and the project it names becomes a registry repository
+and a store path **written to** (`<dir>/<project>/v<version>`). Since v0.58.0
+a reference that does not stay inside the store (`filepath.IsLocal`) and a
+project that is not a usable name (`ValidateProjectName`) are both refused —
+and both refusals are *said*, because a silent skip is the failure this code
+already paid for once at 1266 references. Without the first, a bottle naming
+`@rpath/../../../../etc/passwd` had that reference passed over as "satisfied"
+on the strength of a file that is neither a library nor in the store.
+
+`FuzzMachoRef` holds the invariant over arbitrary input; its committed corpus
+includes `@rpath/..0`, which refuted the first version of the test's own
+assertion in 0.16s — `..0` is an ordinary filename, and a hand-rolled
+re-derivation of `IsLocal` was wrong where `IsLocal` was right.
+
 ## Where it is proven to work
 
 This package reads formats it did not write — ELF and Mach-O headers, OCI
