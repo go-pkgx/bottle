@@ -20,13 +20,21 @@ var Exec func(argv0 string, argv []string, env []string) error
 
 // ResolveBinPath maps a logical bin path (…/bin/foo) to the file that actually
 // exists on disk. On Windows it prefers "foo.exe" (the PE image the toolchain
-// produces), falling back to the bare name; on UNIX it is the identity. This
-// keeps BinNames/PrimaryBin returning logical, extension-free names while the
-// run/stub sites resolve to the real executable.
+// produces), on a wasm host (wasip1, js) "foo.wasm" (the module a wasip1/wasm
+// bottle ships under bin/), falling back to the bare name; on UNIX it is the
+// identity. This keeps BinNames/PrimaryBin returning logical, extension-free
+// names while the run/stub sites resolve to the real executable.
 func ResolveBinPath(bin string) string {
-	if goos() == "windows" && !strings.HasSuffix(bin, ".exe") {
-		if _, err := os.Stat(bin + ".exe"); err == nil {
-			return bin + ".exe"
+	ext := ""
+	switch goos() {
+	case "windows":
+		ext = ".exe"
+	case "wasip1", "js":
+		ext = ".wasm"
+	}
+	if ext != "" && !strings.HasSuffix(bin, ext) {
+		if _, err := os.Stat(bin + ext); err == nil {
+			return bin + ext
 		}
 	}
 	return bin

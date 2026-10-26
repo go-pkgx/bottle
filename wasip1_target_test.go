@@ -1,6 +1,10 @@
 package bottle
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // TestPlatformBlockNamesEveryPlatform pins the fix: before it, platformBlock
 // listed only linux/darwin and x86-64/aarch64, so on a linux host a recipe's
@@ -44,6 +48,39 @@ func TestFlattenEnvIgnoresAWasip1Block(t *testing.T) {
 	flattenEnv(in, out, "wasip1", "wasm", "/p", "1.0", nil)
 	if out["A"] != "1" || out["B"] != "2" || len(out) != 2 {
 		t.Errorf("wasip1 host: got %v, want A=1 B=2", out)
+	}
+}
+
+// TestResolveBinPathWasm: a wasip1/wasm bottle ships bin/<name>.wasm while the
+// recipe's `provides: bin/<name>` stays extension-free, as with windows .exe.
+func TestResolveBinPathWasm(t *testing.T) {
+	for _, host := range []string{"wasip1", "js"} {
+		setGoos(t, host)
+		dir := t.TempDir()
+		bin := filepath.Join(dir, "tool")
+		if err := os.WriteFile(bin+".wasm", []byte("\x00asm\x01\x00\x00\x00"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := ResolveBinPath(bin); got != bin+".wasm" {
+			t.Errorf("%s: ResolveBinPath = %q, want %q", host, got, bin+".wasm")
+		}
+		if got := ResolveBinPath(bin + ".wasm"); got != bin+".wasm" {
+			t.Errorf("%s: already-suffixed path changed: %q", host, got)
+		}
+		bare := filepath.Join(dir, "other")
+		if got := ResolveBinPath(bare); got != bare {
+			t.Errorf("%s: missing module = %q, want bare name", host, got)
+		}
+	}
+	// a unix host never goes looking for .wasm
+	setGoos(t, "linux")
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "tool")
+	if err := os.WriteFile(bin+".wasm", []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolveBinPath(bin); got != bin {
+		t.Errorf("linux: ResolveBinPath = %q, want identity", got)
 	}
 }
 
