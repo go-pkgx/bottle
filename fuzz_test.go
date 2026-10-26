@@ -1,6 +1,7 @@
 package bottle
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode"
@@ -112,6 +113,93 @@ func FuzzDisplayText(f *testing.F) {
 			t.Fatalf("displayText cut mid-rune: %q", got)
 		}
 	})
+}
+
+// A MACH-O LOAD COMMAND IS INPUT FROM A STRANGER.
+//
+// The three targets above all read something fetched as DATA — a catalogue, a
+// lock, a summary. This one reads something fetched as a BINARY: the @rpath
+// references in a downloaded bottle's load commands. They were never
+// validated, and they decide two things that leave the process:
+//
+//   - the path the closure stats to call a reference "already satisfied"
+//     (<dir>/<rel>), so a reference that escapes the store could be satisfied
+//     by any file the process can see;
+//   - the PROJECT, which becomes a registry repository in FetchVersions and a
+//     store path in InstallFor — <dir>/<project>/v<version>, written to.
+//
+// The property is not "it does not panic". It is that nothing which gets past
+// these two can name anything outside the store.
+func FuzzMachoRef(f *testing.F) {
+	f.Add("@rpath/abseil.io/v20260526.0/lib/libabsl_base.2605.0.0.dylib")
+	f.Add("@rpath/gnupg.org/gpgme/abi-libgpgme.11.dylib/lib/libgpgme.11.dylib")
+	f.Add("@rpath/libabsl_base.2608.0.0.dylib") // the bare shape, 1266 of 3003
+	f.Add("/usr/lib/libSystem.B.dylib")
+	f.Add("@rpath/../../../../etc/passwd")
+	f.Add("@rpath/../../v1/x")
+	f.Add("@rpath//v1/x")
+	f.Add("@rpath/a/../../../b/v1/x")
+	f.Add("@rpath/" + strings.Repeat("a/", 40) + "v1/x")
+	f.Add("@rpath/a\x00b/v1/x")
+	f.Fuzz(func(t *testing.T, ref string) {
+		if !strings.HasPrefix(ref, "@rpath/") {
+			return // the host's; the walk skips it before either check
+		}
+		rel, inStore := storeRel(ref)
+		if inStore {
+			// The property is about the JOIN, not about how the string looks.
+			//
+			// ⛔ The first version of this assertion was
+			// `strings.HasPrefix(filepath.Clean(rel), "..")`, and the fuzzer
+			// refuted it in 0.16s with `@rpath/..0`: "..0" is an ordinary
+			// filename that merely starts with two dots, and joining it stays
+			// inside. The hand-rolled re-derivation of IsLocal was wrong where
+			// IsLocal was right — so assert what actually matters, which is
+			// that <root>/<rel> is still under <root>.
+			root := filepath.FromSlash("/store")
+			p := filepath.Join(root, rel)
+			if p != root && !strings.HasPrefix(p, root+string(filepath.Separator)) {
+				t.Fatalf("storeRel accepted %q -> %q, and %q leaves %q", ref, rel, p, root)
+			}
+		}
+		// And the project, which is the half that gets WRITTEN to.
+		m := storeRefRE.FindStringSubmatch(ref)
+		if m == nil {
+			return // named no project directory; no want is built
+		}
+		if err := ValidateProjectName(m[1]); err != nil {
+			return // rejected at the use site, which is the point
+		}
+		// It passed, so it is safe to use as a store path: the same rule the
+		// catalogue is held to.
+		p := filepath.Join("/store", filepath.FromSlash(m[1]))
+		if !strings.HasPrefix(p, filepath.FromSlash("/store/")) {
+			t.Fatalf("%q yielded project %q, which escapes the store: %q", ref, m[1], p)
+		}
+	})
+}
+
+// The concrete hostile inputs, named rather than left to the fuzzer to
+// rediscover: a corpus is a record of what was already understood.
+func TestMachoRefRejectsWhatLeavesTheStore(t *testing.T) {
+	for _, ref := range []string{
+		"@rpath/../../../../etc/passwd",
+		"@rpath/../x",
+		"@rpath/a/../../../../etc/v1/x",
+	} {
+		if rel, ok := storeRel(ref); ok {
+			t.Errorf("storeRel(%q) = %q, true — it escapes the store", ref, rel)
+		}
+	}
+	// A reference that stays inside is still accepted, or the guard would be
+	// a refusal of everything, which passes just as quietly.
+	rel, ok := storeRel("@rpath/abseil.io/v20260526.0/lib/libabsl_base.2605.0.0.dylib")
+	if !ok {
+		t.Fatalf("a normal store reference was refused")
+	}
+	if rel != filepath.FromSlash("abseil.io/v20260526.0/lib/libabsl_base.2605.0.0.dylib") {
+		t.Fatalf("storeRel gave %q", rel)
+	}
 }
 
 // mustBePrintable is the one rule, stated once: no control character, no
