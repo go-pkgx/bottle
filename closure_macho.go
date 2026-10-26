@@ -188,6 +188,32 @@ func unresolvedRefs(prefixes []string, dir string) []want {
 				}
 				m := storeRefRE.FindStringSubmatch(ref)
 				if m == nil {
+					// ⛔ REACHED ONLY WHEN THE FILE IS ALSO ABSENT: the two
+					// checks above have already let through everything that
+					// is the host's (not @rpath) and everything the store
+					// already satisfies. So this is a reference that will
+					// NOT resolve and that this function cannot even try to
+					// resolve — and until now it said nothing at all.
+					//
+					// What that silence hid, measured 2026-10-26 on the
+					// first full darwin/aarch64 sweep: of 3003 unresolvable
+					// references, 1266 are shaped
+					//
+					//	@rpath/libabsl_base.2608.0.0.dylib
+					//
+					// with no project directory, so storeRefRE cannot match
+					// and no want is built. `bk unresolved` COUNTS those —
+					// it stats every @rpath reference — while this skipped
+					// them, so the auditor and the resolver disagreed about
+					// 42% of a platform's backlog and the log carried not
+					// one line about it.
+					//
+					// This does not resolve them; naming a project from a
+					// bare soname needs the index provideMachoSoname reads
+					// (go-pkgx/bottle#166). It stops the gap being silent,
+					// which is the part that let it reach 1266.
+					warn("%s is NEEDED, is not in the store, and names no project directory — "+
+						"this cannot look for a provider, so it will not resolve", ref)
 					continue
 				}
 				w := want{project: m[1], soname: m[3], ref: ref, abiLine: m[3] != ""}
