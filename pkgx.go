@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -299,13 +300,94 @@ func recipeDoc(project string) (map[string]any, error) {
 	return nil, fmt.Errorf("no recipe for %s in %s or %s", project, PantryOverlay, PantryBase)
 }
 
-// Dir resolves the bottle store (PKGX_DIR, default ~/.pkgx).
+// Dir resolves the bottle store (PKGX_DIR, default ~/.pkgx), expanding the
+// platform placeholders described by [ExpandStorePath].
 func Dir() string {
 	if d := Env("PKGX_DIR"); d != "" {
-		return d
+		return ExpandStorePath(d)
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".pkgx")
+}
+
+// storePlaceholders are the names [ExpandStorePath] knows.
+var storePlaceholders = []string{"{platform}", "{os}", "{arch}"}
+
+// ExpandStorePath replaces the platform placeholders in a store path:
+// `{platform}` becomes `linux-x86-64`, `{os}` becomes `linux` and `{arch}`
+// becomes `x86-64`, all for the RUNNING machine.
+//
+// ⛔ ONE STORE CANNOT HOLD TWO ARCHITECTURES, and nothing said so. A prefix is
+// `$PKGX_DIR/<project>/v<version>/…` with no platform anywhere in it.
+// Measured 2026-10-29 on one machine, the same project and version staged
+// twice:
+//
+//	…/openssl.org/v3.6.4/lib/libssl.so.3     ELF 64-bit x86-64
+//	…/openssl.org/v3.6.4/lib/libssl.3.dylib  Mach-O arm64
+//
+// Those two were kept apart only by being under different PKGX_DIRs. Here the
+// FILE NAMES differ because the operating systems do; between linux/x86-64 and
+// linux/aarch64 they are identical — `lib/libssl.so.3` both times — so a store
+// shared over NFS holds whichever architecture was installed last, and the
+// other one gets `Exec format error` from the kernel with no explanation.
+//
+// ⛔ WHY THIS MATTERS ON A CLUSTER, specifically. srun's `--export` defaults to
+// ALL — Slurm's own documentation: "All of the user's environment will be
+// loaded from the caller's environment" — so the PATH composed on the head node
+// arrives unchanged on every compute node. A head of one architecture and nodes
+// of another is then two failures at once: the PATH names the head's binaries,
+// and the store they point into cannot contain the node's.
+//
+// Giving the platform a place IN the path is what Spack does (its prefixes
+// carry platform, os and target) and it costs nothing here: a path with no
+// placeholder is returned unchanged, so every existing store keeps working.
+//
+//	PKGX_DIR=/shared/pkgx/{platform}     one tree per architecture, one NFS export
+//	PKGX_DIR=/shared/pkgx/{os}/{arch}    the same, split
+//
+// ⛔ BRACES, NOT `$`: the shell expands `$PLATFORM` before pkgx ever sees it,
+// and a value the shell has already eaten cannot be resolved per node. `{…}`
+// survives quoting and reaches the program, which is the point — the SAME
+// exported string has to mean a different directory on each node.
+func ExpandStorePath(p string) string {
+	if !strings.ContainsRune(p, '{') {
+		return p
+	}
+	osn, arch := HostSlug()
+	return strings.NewReplacer(
+		"{platform}", osn+"-"+arch,
+		"{os}", osn,
+		"{arch}", arch,
+	).Replace(p)
+}
+
+// UnknownStorePlaceholders lists the `{…}` names left in a store path that
+// [ExpandStorePath] does not know.
+//
+// ⛔ A MISSPELT PLACEHOLDER IS WORSE THAN NO PLACEHOLDER. `{platfrom}` expands
+// to nothing, so the store becomes a directory literally called `{platfrom}` —
+// which works, silently, as a single-architecture store, and the cluster it was
+// meant to fix fails the same way it did before. Dir cannot return an error
+// without changing every caller, so the question is asked separately and the
+// commands report it.
+func UnknownStorePlaceholders(p string) []string {
+	var out []string
+	for rest := p; ; {
+		open := strings.IndexRune(rest, '{')
+		if open < 0 {
+			return out
+		}
+		rest = rest[open:]
+		end := strings.IndexRune(rest, '}')
+		if end < 0 {
+			return out // an unclosed brace is not a placeholder
+		}
+		name := rest[:end+1]
+		if !slices.Contains(storePlaceholders, name) {
+			out = append(out, name)
+		}
+		rest = rest[end+1:]
+	}
 }
 
 // HostSlug returns the pkgx (os, arch) slug for the running machine.
