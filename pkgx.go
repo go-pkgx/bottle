@@ -1852,6 +1852,11 @@ func InstallFor(r Resolved, pkgxDir, osn, arch string) (bool, error) {
 	if err := ValidateProjectName(r.Project); err != nil {
 		return false, err
 	}
+	// The store says what it holds, so the next reader of a SHARED store can
+	// be told it is the wrong architecture instead of being handed a prefix
+	// whose binaries the kernel refuses. Written here because this is where
+	// the platform being installed is known for certain.
+	MarkStorePlatform(pkgxDir, osn, arch)
 	prefix := filepath.Join(pkgxDir, r.Project, "v"+r.Version.Raw)
 	if st, err := os.Stat(prefix); err == nil && st.IsDir() {
 		return false, nil // already present
