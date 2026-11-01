@@ -40,6 +40,29 @@ import (
 // unparsable file is reported once on stderr and also means an empty list.
 const DeprecatedEnv = "PKGX_DEPRECATED"
 
+// DefaultDeprecated is the list used when DeprecatedEnv is unset.
+//
+// ⛔ IT EXISTS BECAUSE AN OPT-IN ENVIRONMENT VARIABLE FIXES NOTHING. Shipped
+// with the variable as the only source, this whole feature changed no answer
+// for anybody: openssl's 3.6 line went end-of-life on 2026-11-01 and `^3` went
+// on resolving to 3.6.4 across the fleet, because nothing set the variable.
+// A capability nobody switches on is a capability the fleet does not have.
+//
+// So a binary may carry a default, and `pkgx` does. The precedence is
+// deliberate and the surprising direction is the one to avoid:
+//
+//   - DeprecatedEnv set and readable → that file, and ONLY that file;
+//   - DeprecatedEnv set and broken   → empty, with a warning. It does NOT fall
+//     back to this default: an operator who named a file has said what they
+//     want, and quietly substituting something else would hide their mistake
+//     behind working behaviour;
+//   - DeprecatedEnv unset            → this default.
+//
+// A caller sets it before the first resolution. The list is latched once, so
+// setting it afterwards does nothing — which is why `pkgx` does it in main
+// rather than lazily.
+var DefaultDeprecated map[string][]string
+
 // deprecationOut is where a fall back to a deprecated version is announced.
 var deprecationOut io.Writer = os.Stderr
 
@@ -54,10 +77,17 @@ var deprecatedLines = func(project string) []string {
 	deprecatedOnce.Do(func() {
 		path := os.Getenv(DeprecatedEnv)
 		if path == "" {
+			deprecatedSet = DefaultDeprecated
 			return
 		}
 		b, err := os.ReadFile(path)
 		if err != nil {
+			// Warned, not silent, and NOT replaced by DefaultDeprecated. Before
+			// a default existed this could return quietly because the result
+			// was the same either way; now the two differ, and an operator who
+			// named an unreadable file must not be given a different list
+			// without being told.
+			fmt.Fprintf(deprecationOut, "pkgx: ignoring %s=%s: %v\n", DeprecatedEnv, path, err)
 			return
 		}
 		if err := json.Unmarshal(b, &deprecatedSet); err != nil {
