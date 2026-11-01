@@ -5,9 +5,17 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/go-compressions/xz"
 	"github.com/klauspost/compress/zstd"
-	"github.com/ulikunitz/xz"
 )
+
+// maxXzDictionary bounds the window an .xz bottle may make the decoder keep:
+// 256 MiB, go-compressions/xz's own default, stated here so the bound is
+// readable (xz -9 uses 64 MiB). The window grows with the decoded data, never
+// from the dictionary size a header declares, so this caps what real data can
+// ask for and is not an allocation. Data that needs more fails with an error
+// that satisfies errors.Is(err, xz.ErrTooLarge).
+const maxXzDictionary = 256 << 20
 
 // Decompressor wraps a bottle body in the decoder its extension names, and
 // returns a close function for the decoders that hold resources.
@@ -28,7 +36,7 @@ func Decompressor(ext string, body io.Reader) (io.Reader, func(), error) {
 		}
 		return z, z.Close, nil
 	case ExtTarXz:
-		x, err := xz.NewReader(body)
+		x, err := xz.ReaderConfig{MaxDictionary: maxXzDictionary}.NewReader(body)
 		if err != nil {
 			return nil, nil, err
 		}
