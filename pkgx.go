@@ -1075,11 +1075,38 @@ func PickVersionFor(project, constraint, osn, arch string) (Ver, error) {
 // was seeded from a Go map, so the winner changed between runs — the same
 // closure resolved gettext to 0.26 eight times and 1.0.0 four times out of
 // twelve.
+//
+// Among the versions that satisfy, one on an end-of-life line (see
+// DeprecatedEnv) ranks LAST: it is chosen only when nothing else satisfies, and
+// the fall back is announced on stderr. With no list the behaviour is exactly
+// the newest satisfier.
 func PickVersionForAll(project string, constraints []string, osn, arch string) (Ver, error) {
+	v, warn, err := PickVersionForAllWarn(project, constraints, osn, arch)
+	if warn != "" {
+		fmt.Fprintln(deprecationOut, warn)
+	}
+	return v, err
+}
+
+// PickVersionForAllWarn is PickVersionForAll returning the deprecation warning
+// as data instead of printing it: "" when the pick is not on an end-of-life
+// line.
+func PickVersionForAllWarn(project string, constraints []string, osn, arch string) (Ver, string, error) {
+	v, warn, err := pickVersionForAll(project, constraints, osn, arch)
+	return v, warn, err
+}
+
+func pickVersionForAll(project string, constraints []string, osn, arch string) (Ver, string, error) {
 	vs, fromRegistry, err := versionsForSourced(project, osn, arch)
 	if err != nil {
-		return Ver{}, err
+		return Ver{}, "", err
 	}
+	dead := deprecatedLines(project)
+	// The newest satisfier on an end-of-life line, kept (not discarded) so a
+	// request that admits nothing else still resolves. RANK, not FILTER.
+	var fallback Ver
+	var fallbackLine string
+	haveFallback := false
 	// Our registry's tag listing spans every platform, so the newest tag that
 	// satisfies a constraint is not necessarily installable for the one being
 	// resolved: a mirror wave that lands one arch publishes a tag the other
@@ -1097,7 +1124,7 @@ func PickVersionForAll(project string, constraints []string, osn, arch string) (
 		if fromRegistry {
 			tag, ok, err := publishedTagFor(project, vs[i], osn, arch)
 			if err != nil {
-				return Ver{}, err
+				return Ver{}, "", err
 			}
 			if !ok {
 				absent = append(absent, vs[i].Raw)
@@ -1105,9 +1132,25 @@ func PickVersionForAll(project string, constraints []string, osn, arch string) (
 			}
 			v := vs[i]
 			v.Tag = tag
-			return v, nil
+			if line, isDead := deprecatedLine(v.Raw, dead); isDead {
+				if !haveFallback {
+					fallback, fallbackLine, haveFallback = v, line, true
+				}
+				continue
+			}
+			return v, "", nil
 		}
-		return vs[i], nil
+		if line, isDead := deprecatedLine(vs[i].Raw, dead); isDead {
+			if !haveFallback {
+				fallback, fallbackLine, haveFallback = vs[i], line, true
+			}
+			continue
+		}
+		return vs[i], "", nil
+	}
+	if haveFallback {
+		return fallback, fmt.Sprintf("pkgx: %s %s is on end-of-life release line %s and nothing supported satisfies %s; using it",
+			project, fallback.Raw, fallbackLine, quoteAll(constraints)), nil
 	}
 	// ⛔ NO CONSTRAINT MEANS THE CLAUSE IS OMITTED, not printed empty.
 	//
@@ -1129,7 +1172,7 @@ func PickVersionForAll(project string, constraints []string, osn, arch string) (
 	// 1940 projects on darwin/aarch64, 2026-10-23), and for one release the
 	// hint that names `pkgs request` could not see it. See NoBottleHereError.
 	if len(absent) > 0 {
-		return Ver{}, &NoBottleHereError{
+		return Ver{}, "", &NoBottleHereError{
 			Project: project, OS: osn, Arch: arch,
 			Constraints: constraints, Available: vs, Absent: absent,
 		}
@@ -1137,9 +1180,9 @@ func PickVersionForAll(project string, constraints []string, osn, arch string) (
 	if len(constraints) == 0 {
 		// Reachable only with no versions at all: with nothing constrained
 		// every version satisfies, so the loop above would have returned one.
-		return Ver{}, fmt.Errorf("no versions of %s are known", project)
+		return Ver{}, "", fmt.Errorf("no versions of %s are known", project)
 	}
-	return Ver{}, fmt.Errorf("no version of %s satisfies %s (available: %s)", project, quoteAll(constraints), availableVersions(vs))
+	return Ver{}, "", fmt.Errorf("no version of %s satisfies %s (available: %s)", project, quoteAll(constraints), availableVersions(vs))
 }
 
 // availableVersions renders what the reader could have asked for instead.

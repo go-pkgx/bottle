@@ -171,6 +171,19 @@ rebuild either: what follows must be all digits. And it splits at the **last**
 underscore, so in `1.0_2_3` the version is `1.0_2` and the rebuild is 3 —
 bk appends `_N` to a version it already resolved.
 
+## An end-of-life line is ranked last, never removed
+
+`PKGX_DEPRECATED` may name a JSON file of end-of-life release lines per
+project, e.g. `{"openssl.org": ["3.6", "3.4"]}`. Among the versions that
+satisfy a constraint, one on a listed line is chosen only when nothing else
+satisfies, and the fall back is announced on stderr
+(`PickVersionForAllWarn` returns the warning as data). So `^3` resolves to
+3.5.8 while `^3.6.4`, `=3.6.4` and a lock still resolve to 3.6.4: it is a
+**rank**, not a filter, and it never reaches across a soname boundary (`^3`
+and `^4` share no satisfier). No variable, no file, or an unparsable one means
+no list, which is exactly the behaviour without it. The list is read locally;
+the resolver never needs the network to choose.
+
 ## The lock format lives here
 
 `bk lock` wrote locks and nothing could read one back, because the reader
