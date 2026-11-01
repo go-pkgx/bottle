@@ -63,6 +63,24 @@ jobs:
       - run: go test -race -coverprofile=cov.out ./...
       - run: go tool cover -func=cov.out | tail -1
 
+  # A planted xz bomb (a header declaring 1.5 GiB over a few bytes) must cost
+  # kilobytes. Run as a compiled binary under a virtual-memory limit and
+  # GOMEMLIMIT, so that a regression fails by itself instead of allocating
+  # gigabytes of the runner.
+  bombs:
+    name: bombs (ulimit -v, GOMEMLIMIT)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.27.3'
+      - run: go test -c -o bottle.test .
+      - name: run under limits
+        run: |
+          ulimit -v 2097152
+          GOMEMLIMIT=256MiB ./bottle.test -test.run 'XzDeclaredDictionary' -test.v
+
   build:
     runs-on: ubuntu-latest
     strategy:
