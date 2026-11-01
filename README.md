@@ -180,9 +180,28 @@ satisfies, and the fall back is announced on stderr
 (`PickVersionForAllWarn` returns the warning as data). So `^3` resolves to
 3.5.8 while `^3.6.4`, `=3.6.4` and a lock still resolve to 3.6.4: it is a
 **rank**, not a filter, and it never reaches across a soname boundary (`^3`
-and `^4` share no satisfier). No variable, no file, or an unparsable one means
-no list, which is exactly the behaviour without it. The list is read locally;
-the resolver never needs the network to choose.
+and `^4` share no satisfier). The list is read locally; the resolver never
+needs the network to choose.
+
+A binary may also carry a default, `DefaultDeprecated`, set before the first
+resolution — because an opt-in variable fixes nothing: with the variable as
+the only source, this feature changed no answer for anybody, and openssl's
+3.6 line went end-of-life with `^3` still resolving to 3.6.4 everywhere.
+`pkgx` sets it from an embedded, dated list.
+
+The precedence is deliberate, and the surprising direction is the one to
+avoid:
+
+| `PKGX_DEPRECATED` | list used |
+| --- | --- |
+| set, readable | that file, and **only** that file — never a union with the default |
+| set, missing or unparsable | **empty, with a warning** — explicitly *not* the default |
+| unset | `DefaultDeprecated` |
+| unset, and no default | no list, i.e. the behaviour without this feature |
+
+An operator who names a file has said what they want; quietly substituting
+the default for an unreadable one would hide their mistake behind behaviour
+that looks like it worked.
 
 ## The lock format lives here
 
