@@ -175,6 +175,45 @@ of rebuilds below it:
 1.8.2 < 1.8.2_1 < 1.8.2_2 < 1.8.2_10 < 1.8.3
 ```
 
+### ⛔ And it has no shorter spelling
+
+`tagSpellings` offers `1.2.0` as another way of writing `1.2`, because a
+trailing zero really is the same release. It built those alternatives from the
+numeric components alone — and the rebuild counter is not one of them, so
+`3.3.11_1` used to offer **`3.3.11`**, which is not another spelling of it but
+the build it supersedes.
+
+`PublishedTagFor` walks these and asks the registry about each, so a lock
+pinning the rebuilt bottle was answered "published" on finding the un-rebuilt
+one, and a catalogue would advertise a rebuild that does not exist. That is
+the same defect as the comparator's, by a second route, and the same one the
+non-zero rule already guards against for neighbouring releases — *26.8.1 must
+not suggest 26.8.0*.
+
+A rebuild now has exactly one spelling: its own.
+
+### ⛔ Upstream pkgx cannot read a `_N` tag, and that is a deliberate trade
+
+`_N` follows Homebrew's `rebuild` and Debian's `+bN`, and **upstream
+pkgx/libpkgx cannot parse it at all**. Its `SemVer` constructor
+(`src/utils/semver.ts:26-41`, read 2026-11-02) splits on `.` and accepts a
+part only if it matches `/^(\d+)([a-z])$/` — last part only — or `/^\d+$/`,
+and otherwise throws `invalid version`. For `3.3.11_1` the parts are `3`, `3`,
+`11_1`; the third matches neither.
+
+So **pointing an upstream pkgx client at this registry is not a supported
+configuration** once a project carries a rebuild. It throws rather than
+resolving the wrong bottle, which is the better of the two failures, but it is
+a failure.
+
+The alternatives were weighed and rejected: a fourth numeric component
+(`3.3.11.1`) parses upstream but cannot be told apart from a genuine
+four-component release such as ghc `5.64.3.2`; a letter suffix (`3.3.11a`)
+parses upstream but caps at 26 and occupies the slot real versions use, as
+openssl's `1.1.1w` does. Build metadata (`+neon`) is not an option at all —
+the OCI distribution spec requires a tag to match
+`[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}`, which excludes `+`.
+
 ### An underscore is not always a rebuild
 
 `_` is admitted by `ValidateVersionString` because it is ordinary in versions
