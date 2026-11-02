@@ -1954,11 +1954,7 @@ func InstallFor(r Resolved, pkgxDir, osn, arch string) (bool, error) {
 	// point there — and link the canonical spelling to it.
 	src, alias := extractedPrefix(tmp, r)
 	dest := filepath.Join(pkgxDir, r.Project, filepath.Base(src))
-	if err := os.Rename(src, dest); err != nil {
-		// Another concurrent worker may have installed it meanwhile.
-		if st, e := os.Stat(dest); e == nil && st.IsDir() {
-			return false, nil
-		}
+	if moved, err := renameOrExplain(src, dest, prefix, r.Project, r.Version.Raw); err != nil || !moved {
 		return false, err
 	}
 	if alias {
@@ -1967,6 +1963,46 @@ func InstallFor(r Resolved, pkgxDir, osn, arch string) (bool, error) {
 	}
 	writeVersionLinks(pkgxDir, r)
 	writeABILinks(pkgxDir, r, osn, arch)
+	return true, nil
+}
+
+// renameOrExplain moves the unpacked tree into place and reports whether it
+// moved. It exists for the one ambiguous failure: `dest` already occupied.
+//
+// ⛔ "ALREADY INSTALLED" MUST MEAN THE REQUESTED PREFIX IS THERE. This used
+// to answer on the strength of `dest` alone — and `dest` is the directory the
+// BOTTLE carries, which is not always the version that was asked for. A
+// rebuild is published as `3.3.11_1` and still unpacks to `v3.3.11`.
+//
+// So installing a rebuild into a store that already held `v3.3.11` renamed
+// onto an occupied directory, saw it occupied, and reported success having
+// installed nothing. The caller then ran a binary under a prefix that was
+// never created and got a bare `no such file or directory`
+// (go-pkgx/bk#386, found on the first real use of the rebuild counter):
+//
+//	Install         -> fresh=false err=<nil>
+//	stat(v3.3.11_1) -> no such file or directory
+//
+// A genuine concurrent install leaves `prefix` behind too — the other worker
+// writes the alias — so asking about `prefix` separates "somebody else did
+// this" from "this did not happen".
+//
+// It does NOT create the alias here. That would serve the OLD content under
+// the new name, which is worse than failing: the caller asked for a rebuild
+// and would silently get the bottle it was meant to supersede.
+func renameOrExplain(src, dest, prefix, project, version string) (bool, error) {
+	if err := os.Rename(src, dest); err != nil {
+		if st, e := os.Stat(dest); e == nil && st.IsDir() {
+			if _, pe := os.Stat(prefix); pe == nil {
+				return false, nil // another worker got there first
+			}
+			return false, fmt.Errorf(
+				"%s %s was not installed: %s already holds other content and %s was requested — "+
+					"the bottle carries %s",
+				project, version, dest, prefix, filepath.Base(dest))
+		}
+		return false, err
+	}
 	return true, nil
 }
 
