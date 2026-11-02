@@ -1300,6 +1300,20 @@ func tagSpellings(v Ver) []string {
 	if v.Tag != "" {
 		return []string{first}
 	}
+	// ⛔ A REBUILD HAS NO SHORTER SPELLING. The alternatives below are built
+	// from v.Nums, and the rebuild counter is not in v.Nums — so `3.3.11_1`
+	// used to offer `3.3.11`, which is not another spelling of it but the
+	// build it SUPERSEDES.
+	//
+	// PublishedTagFor walks these and asks the registry about each, so a lock
+	// pinning the rebuilt bottle was told "published" on finding the
+	// un-rebuilt one, and a catalogue would advertise a rebuild that does not
+	// exist. Same defect the non-zero rule below exists for — "26.8.1 must
+	// not suggest 26.8.0" — and the same one rebuild_test.go describes from
+	// the comparator's side, arriving here by a second route.
+	if v.Rebuild != 0 {
+		return []string{first}
+	}
 	out := []string{first}
 	seen := map[string]bool{first: true}
 	nums := v.Nums
