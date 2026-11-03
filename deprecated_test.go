@@ -114,8 +114,20 @@ func TestDeprecatedFileMissingOrUnparsableMeansEmpty(t *testing.T) {
 		defer func() { deprecationOut = old }()
 		return deprecatedLines("openssl.org")
 	}
-	if got := load(""); got != nil {
-		t.Errorf("unset: %v", got)
+	// ⛔ UNSET NOW MEANS THE LIBRARY'S LIST, not an empty one. That is the
+	// whole of go-pkgx/bottle#186: an activation each binary had to remember
+	// reached pkgx and not pkgm, so the installer resolved `openssl.org@^3`
+	// to the end-of-life 3.6.4 while pkgx gave 3.5.8.
+	//
+	// The three cases below are unchanged and are the reason this test still
+	// earns its place: a file that was NAMED and cannot be read is still
+	// empty, never a silent fall back to the default. An operator who named a
+	// file has said what they want.
+	if got := load(""); len(got) == 0 {
+		t.Error("unset: got an empty list, so the library default is inert")
+	}
+	if got := load(filepath.Join(dir, "nope.json")); got != nil {
+		t.Errorf("missing file must not fall back to the default: %v", got)
 	}
 	if got := load(filepath.Join(dir, "nope.json")); got != nil {
 		t.Errorf("missing: %v", got)
