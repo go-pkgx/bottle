@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ⛔⛔ THE LIBRARY'S DEFAULT IS NOT EMPTY, which is the whole point of this
@@ -51,11 +52,16 @@ func TestBothHalvesCoverTheSameProjects(t *testing.T) {
 	}
 }
 
-// The date is a fact a reader needs, and a list with no date reads as fresh
-// forever.
+// The date is the only thing that distinguishes a current judgement from one a
+// release left behind, and a date that does not parse is no date at all. In
+// the future it is a typo, not a measurement.
 func TestTheListIsDated(t *testing.T) {
-	if len(strings.Split(KnownDeprecatedAsOf, "-")) != 3 {
-		t.Errorf("KnownDeprecatedAsOf = %q, want YYYY-MM-DD", KnownDeprecatedAsOf)
+	d, err := time.Parse(time.DateOnly, KnownDeprecatedAsOf)
+	if err != nil {
+		t.Fatalf("KnownDeprecatedAsOf = %q: %v", KnownDeprecatedAsOf, err)
+	}
+	if d.After(time.Now().UTC().AddDate(0, 0, 1)) {
+		t.Errorf("KnownDeprecatedAsOf %s is in the future", KnownDeprecatedAsOf)
 	}
 }
 
@@ -66,8 +72,18 @@ func TestTheListIsDated(t *testing.T) {
 func TestTheListHoldsLinesNotVersions(t *testing.T) {
 	for project, lines := range KnownDeprecated {
 		for _, line := range lines {
-			if n := len(strings.Split(line, ".")); n > 3 {
-				t.Errorf("%s %q has %d components: a LINE, not a version", project, line, n)
+			switch {
+			case line == "":
+				// deprecatedLine skips an empty entry, so it silently covers
+				// nothing while reading as a rule.
+				t.Errorf("%s has an empty line, which matches nothing", project)
+			case strings.HasPrefix(line, "."), strings.HasSuffix(line, "."):
+				t.Errorf("%s line %q is not a dotted prefix", project, line)
+			case strings.Count(line, ".") > 2:
+				// A full version still matches itself, so it reads as if the
+				// whole line were covered while covering one release — the
+				// kind of entry that looks right in review.
+				t.Errorf("%s line %q has four components: a release, not a line", project, line)
 			}
 		}
 	}
