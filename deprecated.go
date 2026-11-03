@@ -48,8 +48,17 @@ const DeprecatedEnv = "PKGX_DEPRECATED"
 // on resolving to 3.6.4 across the fleet, because nothing set the variable.
 // A capability nobody switches on is a capability the fleet does not have.
 //
-// So a binary may carry a default, and `pkgx` does. The precedence is
-// deliberate and the surprising direction is the one to avoid:
+// ⛔⛔ AND LETTING EACH BINARY CARRY ITS OWN DEFAULT FIXED IT ONLY WHERE
+// SOMEONE REMEMBERED. That was the second shape of the same defect: the
+// activation lived in `pkgx/internal/app`, unimportable from any other module,
+// so `pkgm` — the INSTALLER — went on resolving `openssl.org@^3` to the
+// end-of-life 3.6.4 while `pkgx` gave 3.5.8. Measured 2026-11-03, A/B on one
+// pkgm binary. See KnownDeprecated.
+//
+// So this now HOLDS the library's list rather than starting empty: every
+// consumer inherits the ranking, and a binary that wants a different list
+// assigns this variable as before. The precedence is unchanged, and the
+// surprising direction is still the one to avoid:
 //
 //   - DeprecatedEnv set and readable → that file, and ONLY that file;
 //   - DeprecatedEnv set and broken   → empty, with a warning. It does NOT fall
@@ -58,10 +67,9 @@ const DeprecatedEnv = "PKGX_DEPRECATED"
 //     behind working behaviour;
 //   - DeprecatedEnv unset            → this default.
 //
-// A caller sets it before the first resolution. The list is latched once, so
-// setting it afterwards does nothing — which is why `pkgx` does it in main
-// rather than lazily.
-var DefaultDeprecated map[string][]string
+// A caller that overrides it must do so before the first resolution: the list
+// is latched once, so assigning it afterwards does nothing.
+var DefaultDeprecated = KnownDeprecated
 
 // deprecationOut is where a fall back to a deprecated version is announced.
 var deprecationOut io.Writer = os.Stderr
