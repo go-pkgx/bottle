@@ -945,6 +945,27 @@ func ociVersionsFor(project string) ([]Ver, error) {
 // order the registry happens to list tags in.
 // numericKey is a version's canonical numeric identity: "2.44" and "2.44.0"
 // share one, since cmpVer already treats them as the same version.
+//
+// ⛔⛔ THE REBUILD COUNTER IS PART OF THE IDENTITY, NOT A SPELLING OF IT.
+//
+// This read v.Nums alone, and the counter is not in v.Nums — the same root
+// cause rebuildspelling_test.go names for tagSpellings, arriving here by a
+// third route. So "3.3.11" and "3.3.11_1" shared the key "3.3.11",
+// selectVersions kept whichever supersedes() preferred, and the other VANISHED
+// from every candidate list built from a registry listing.
+//
+// Measured on ghcr.io/go-pkgx/packages/fftw.org, whose tags include both:
+// VersionsFor returned 3.3.11_1 only, and `=3.3.11` resolved to nothing at
+// all, though the bottle is published and pullable. A lock pinning a version
+// therefore STOPPED RESOLVING the day somebody rebuilt it — the reproducibility
+// break is the exact mirror of the one rebuild_test.go was written about, where
+// a pin on the rebuilt bottle was satisfied by the un-rebuilt, vulnerable one.
+//
+// A rebuild is a different build of the same sources: a DIFFERENT bottle, with
+// a different digest, which is the whole reason the counter exists. Two
+// distinct builds need two distinct keys. cmpVer already sorts _1 after the
+// plain tag, so "the newest" still picks the rebuild — this only stops the
+// loser of that comparison from being deleted outright.
 func numericKey(v Ver) string {
 	n := len(v.Nums)
 	for n > 1 && v.Nums[n-1] == 0 {
@@ -954,7 +975,13 @@ func numericKey(v Ver) string {
 	for i := 0; i < n; i++ {
 		parts[i] = strconv.Itoa(v.Nums[i])
 	}
-	return strings.Join(parts, ".")
+	key := strings.Join(parts, ".")
+	if v.Rebuild != 0 {
+		// "3.3.11_1" and "v3.3.11_1" still share this key: those ARE two
+		// spellings of one build, which is what the key is for.
+		key += "_" + strconv.Itoa(v.Rebuild)
+	}
+	return key
 }
 
 // supersedes reports whether candidate v should replace the one already kept for
