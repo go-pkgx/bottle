@@ -416,6 +416,17 @@ type Ver struct {
 	// and, here, the literal state of the registry: measured 2026-10-10, 0
 	// of 1371 published version strings carry one.
 	Rebuild int
+	// Variant is the concrete spec's hash from the tag's `-h<hash>` suffix:
+	// WHICH BUILD of this version, when several were published.
+	//
+	// It is not ordered and never will be. A rebuild counter says "newer than";
+	// a variant hash says "different from", and two builds of one version are
+	// siblings rather than a sequence. That is why cmpVer ignores it and
+	// numericKey does not: ordering by it would invent a preference the
+	// registry never expressed, and dropping it from the identity would
+	// collapse two bottles into one — the defect numericKey already carries a
+	// comment about.
+	Variant string
 }
 
 // tag is the registry tag to pull this version from.
@@ -981,6 +992,14 @@ func numericKey(v Ver) string {
 		// spellings of one build, which is what the key is for.
 		key += "_" + strconv.Itoa(v.Rebuild)
 	}
+	if v.Variant != "" {
+		// ⛔ AND THE SAME ARGUMENT, FOR THE SAME REASON. A variant hash names
+		// a different BUILD of this version — different options, different
+		// closure, different bytes. Leaving it out of the identity would let
+		// one variant delete its sibling from the listing, which is exactly
+		// what the rebuild counter did before it was added above.
+		key += "-h" + v.Variant
+	}
 	return key
 }
 
@@ -1011,6 +1030,13 @@ func selectVersions(tags []string, wantFlavor string) []Ver {
 		if flavor != "" && flavor != wantFlavor {
 			continue // built against some other glibc: never ours
 		}
+		// The variant hash comes off AFTER the glibc flavour, because the
+		// flavour is the older spelling and sits outermost in the tags that
+		// carry it. A tag has at most one of the two in practice — glibc is a
+		// dependency now, so a new build records it in the hash — but the
+		// order is stated rather than assumed, since a tag carrying both must
+		// still read back the same way it was written.
+		ver, variant := SplitVariantHash(ver)
 		// Key on the NUMERIC version, so "1.0.0", "v1.0.0" and "1.0" are one
 		// version. They compare equal, so leaving them as separate candidates
 		// makes the pick depend on the registry's listing order — and our own
@@ -1019,11 +1045,14 @@ func selectVersions(tags []string, wantFlavor string) []Ver {
 		// installed BOTH glibc trees side by side and linked against a sysroot
 		// that was not the one its loader came from.
 		v := ParseVer(ver)
+		v.Variant = variant
 		key := numericKey(v)
 		if prev, ok := byVersion[key]; ok && !supersedes(v, prev, flavor) {
 			continue
 		}
-		if flavor != "" {
+		if flavor != "" || variant != "" {
+			// Either suffix means Raw is no longer the tag to pull: Raw is
+			// the VERSION, the tag is where this build of it lives.
 			v.Tag = t
 		}
 		byVersion[key] = v
@@ -1123,6 +1152,37 @@ func PickVersionForAllWarn(project string, constraints []string, osn, arch strin
 	return v, warn, err
 }
 
+// variantSiblings lists the OTHER builds of the same version and rebuild as v:
+// tags that differ from it only by their variant hash.
+//
+// ⛔⛔ A COIN FLIP IS NOT A RESOLUTION. Two variants of one version compare
+// EQUAL under cmpVer — deliberately, since a hash is not an order — so a loop
+// that takes "the newest" would return whichever the sort happened to leave
+// last, and the same command would install a different bottle tomorrow. That
+// is the failure this repository keeps finding in another costume: an answer
+// that depends on the order a registry listed its tags.
+//
+// Until a concretiser exists to choose by variant constraint, the honest
+// answer is to refuse and name the candidates. Nothing published today
+// carries a variant hash, so this guard costs nothing now and is in place
+// before the first build that would need it — which is the only time a gate
+// can be added without an incident first.
+func variantSiblings(vs []Ver, v Ver) []string {
+	var out []string
+	for _, o := range vs {
+		if o.Variant == v.Variant || o.Raw != v.Raw || o.Rebuild != v.Rebuild {
+			continue
+		}
+		name := o.Variant
+		if name == "" {
+			name = "(no variant)"
+		}
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func pickVersionForAll(project string, constraints []string, osn, arch string) (Ver, string, error) {
 	vs, fromRegistry, err := versionsForSourced(project, osn, arch)
 	if err != nil {
@@ -1147,6 +1207,12 @@ func pickVersionForAll(project string, constraints []string, osn, arch string) (
 	for i := len(vs) - 1; i >= 0; i-- {
 		if !satisfiesAll(vs[i], constraints) {
 			continue
+		}
+		if sibs := variantSiblings(vs, vs[i]); len(sibs) > 0 {
+			return Ver{}, "", fmt.Errorf(
+				"%s %s was published as %d different builds (%s) and nothing here says which: "+
+					"a variant hash is not a version, so there is no newest one to pick",
+				project, vs[i].Raw, len(sibs)+1, strings.Join(sibs, ", "))
 		}
 		if fromRegistry {
 			tag, ok, err := publishedTagFor(project, vs[i], osn, arch)
