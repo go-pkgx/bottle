@@ -192,6 +192,35 @@ not suggest 26.8.0*.
 
 A rebuild now has exactly one spelling: its own.
 
+### ⛔ And it does not delete the build it supersedes
+
+The same cause, by a third route. `numericKey` gives a version its canonical
+identity so that `2.44` and `2.44.0` — one release, two tags, and our registry
+carries both — collapse into one candidate instead of letting the registry's
+listing order decide. It too was built from the numeric components alone, so
+`3.3.11` and `3.3.11_1` shared the key `3.3.11`, and `selectVersions` kept one
+and **dropped the other from the listing entirely**.
+
+Measured against `ghcr.io/go-pkgx/packages/fftw.org`, which publishes both
+tags:
+
+```
+VersionsFor(fftw.org) = 3.3.11_1          # 3.3.11 is published, and absent
+=3.3.11  darwin/aarch64 -> (nothing)      # the bottle is there, and pullable
+```
+
+So **rebuilding a bottle silently broke every lock that pinned the version it
+rebuilt** — the exact mirror of the comparator defect, where a pin on the
+rebuilt bottle was satisfied by the un-rebuilt, vulnerable one. With three
+builds of one version the listing kept only the last: `1.8.2`, `1.8.2_1` and
+`1.8.2_2` all answered `1.8.2_2`.
+
+Superseding is a question of **order**, which `cmpVer` answers, not a licence
+to delete the loser. The counter now joins the key, so the newest is still the
+rebuild and every published build stays pinnable. Two *spellings* of one build
+still collapse — `3.3.11_1` and `v3.3.11_1` are one bottle — which is what the
+key is for.
+
 ### ⛔ Upstream pkgx cannot read a `_N` tag, and that is a deliberate trade
 
 `_N` follows Homebrew's `rebuild` and Debian's `+bN`, and **upstream
