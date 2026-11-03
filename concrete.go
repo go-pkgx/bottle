@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // A CONCRETE SPEC IS WHAT A BOTTLE IS.
@@ -528,8 +529,20 @@ func isVariantName(s string) bool {
 // parseConstraint refuses a variant left with no value at all, so a guard for
 // it would be one no caller can reach — the kind the coverage gate finds and
 // a reader later mistakes for a reachable case.
+// ⛔ IT ALSO REQUIRES VALID UTF-8, WHICH IS A WIRE CONSTRAINT AND NOT A
+// TASTE. A spec travels as JSON in an OCI annotation, and encoding/json
+// replaces invalid UTF-8 with U+FFFD rather than failing. The value that
+// comes back is then NOT the value that went out, so its hash is not the
+// hash that went out, and a perfectly honest bottle fails its own
+// verification. Caught by a test that put a stray \xff in a variant value
+// and watched the hash change across the wire.
+//
+// Refusing here keeps the annotation lossless for everything the door
+// admits, which is every flag anyone writes: -O3, c++, 80. Base64 in the
+// annotation would buy a case that does not exist by making the one thing a
+// person reads unreadable.
 func isVariantValue(s string) bool {
-	return !strings.ContainsAny(s, canonSep+", \t\n")
+	return utf8.ValidString(s) && !strings.ContainsAny(s, canonSep+", \t\n")
 }
 
 func isLetter(c byte) bool { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }
