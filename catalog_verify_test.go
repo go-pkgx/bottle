@@ -32,14 +32,14 @@ func TestACatalogueIsVerifiedLikeAnyOtherBottle(t *testing.T) {
 
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, err := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	osn, arch := HostSlug()
 
 	// 1. Unsigned, verification on: refused.
-	t.Setenv("PKGX_VERIFY", "1")
+	t.Setenv("ZPKG_VERIFY", "1")
 	if err := PublishCatalog(c, sampleCatalog(), osn, arch); err != nil {
 		t.Fatal(err)
 	}
@@ -78,11 +78,11 @@ func TestACatalogueIsVerifiedLikeAnyOtherBottle(t *testing.T) {
 
 	// 3. And the opt-out still works, because the seed registry a sovereign
 	//    build runs against signs nothing and must stay usable.
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	if err := PublishCatalog(c, sampleCatalog(), osn, arch); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := FetchCatalog(c, osn, arch); err != nil {
-		t.Errorf("PKGX_VERIFY=0 still refused: %v", err)
+		t.Errorf("ZPKG_VERIFY=0 still refused: %v", err)
 	}
 }

@@ -30,7 +30,7 @@ func TestEveryRealProjectNameIsAccepted(t *testing.T) {
 		"crates.io/ripgrep",
 		"rgbds.gbdev.io",
 		"agpt.co",
-		"go-pkgx.dev/catalog", // the catalogue's own name
+		"go-zpkg.github.io/catalog", // the catalogue's own name
 		"tcl-lang.org",
 		"llvm.org",
 		"c-ares.org",

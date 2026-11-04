@@ -22,10 +22,10 @@ import (
 // (three) on two, and libssh.org — which has NO platform tags, so its index is
 // never recomposed — had lost it on none.
 func TestEveryIndexEntryKeepsItsArtifactType(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, err := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err != nil {
 		t.Fatal(err)
 	}

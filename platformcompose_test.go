@@ -14,10 +14,10 @@ import (
 // same COMPLETE index instead of each dropping the other's platform. 428 index
 // entries were lost in a single day of publishing before this.
 func TestIndexComposedFromPlatformTags(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, err := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,10 +58,10 @@ func TestIndexComposedFromPlatformTags(t *testing.T) {
 // shaped wrong, are skipped rather than failing the composition — which would
 // block every later publish of that version.
 func TestPlatformManifestsSurvivesABadTag(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, err := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestPlatformManifestsSurvivesABadTag(t *testing.T) {
 	fr.mu.Lock()
 	// A platform tag that RESOLVES but whose name carries no arch: it must be
 	// skipped on its shape, not on a failed lookup.
-	repoKey := "go-pkgx/bottles/hello.test"
+	repoKey := "go-zpkg/bottles/hello.test"
 	good := fr.manifests[repoKey+"|1.2.3--linux-x86-64"]
 	fr.manifests[repoKey+"|1.2.3--noarch"] = good
 	fr.mtypes[repoKey+"|1.2.3--noarch"] = fr.mtypes[repoKey+"|1.2.3--linux-x86-64"]
@@ -89,10 +89,10 @@ func TestPlatformManifestsSurvivesABadTag(t *testing.T) {
 // the index's own contents, which is what happened before platform tags — never
 // an error, because that would stop a publish that would otherwise succeed.
 func TestPlatformManifestsWhenTagsCannotBeListed(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, err := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestUpsertPlatformIsIdempotentAcrossComposition(t *testing.T) {
 // makes the index composable, so a push that cannot write it must fail rather
 // than fall back to the merge that loses entries.
 func TestPushFailsWhenThePlatformTagCannotBeWritten(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
 	fr.hook = func(r *http.Request) (int, bool) {
@@ -128,7 +128,7 @@ func TestPushFailsWhenThePlatformTagCannotBeWritten(t *testing.T) {
 		}
 		return 0, false
 	}
-	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, err := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,10 +141,10 @@ func TestPushFailsWhenThePlatformTagCannotBeWritten(t *testing.T) {
 // TestPlatformManifestsSkipsATagThatResolvesToNothing: a tag listed but with no
 // manifest behind it is skipped, not fatal.
 func TestPlatformManifestsSkipsATagThatResolvesToNothing(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, err := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestPlatformManifestsSkipsATagThatResolvesToNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	fr.mu.Lock()
-	fr.tags["go-pkgx/bottles/hello.test"]["1.2.3--linux-ppc64le"] = true // listed, never pushed
+	fr.tags["go-zpkg/bottles/hello.test"]["1.2.3--linux-ppc64le"] = true // listed, never pushed
 	fr.mu.Unlock()
 	// Resolving it fails the way a registry fails on a dangling tag.
 	fr.hook = func(r *http.Request) (int, bool) {

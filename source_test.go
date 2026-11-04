@@ -20,7 +20,7 @@ import (
 func TestSourceRoundTrip(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/sources"))
+	c, err := NewOCIClient(fr.base("go-zpkg/sources"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestSourceRoundTrip(t *testing.T) {
 func TestSourcePushIsIdempotent(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/sources"))
+	c, err := NewOCIClient(fr.base("go-zpkg/sources"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestSourcePushIsIdempotent(t *testing.T) {
 func TestPullSourceAbsentIsNamed(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/sources"))
+	c, err := NewOCIClient(fr.base("go-zpkg/sources"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestPullSourceAbsentIsNamed(t *testing.T) {
 func TestPullSourceRefusesBytesThatDoNotHash(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/sources"))
+	c, err := NewOCIClient(fr.base("go-zpkg/sources"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestPullSourceRefusesBytesThatDoNotHash(t *testing.T) {
 func TestPullSourceRefusesAManifestThatIsNotOneLayer(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/sources"))
+	c, err := NewOCIClient(fr.base("go-zpkg/sources"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestPullSourceRefusesAManifestThatIsNotOneLayer(t *testing.T) {
 func TestSourceStoreRejectsAnImpossibleProject(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/sources"))
+	c, err := NewOCIClient(fr.base("go-zpkg/sources"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestSourceStoreRegistryFailures(t *testing.T) {
 	t.Run("layer upload fails", func(t *testing.T) {
 		fr := newFakeRegistry(t, false)
 		defer fr.close()
-		c, _ := NewOCIClient(fr.base("go-pkgx/sources"))
+		c, _ := NewOCIClient(fr.base("go-zpkg/sources"))
 		fr.hook = func(r *http.Request) (int, bool) {
 			_, verb, _ := splitV2(r.URL.Path)
 			return 500, verb == "uploads"
@@ -221,7 +221,7 @@ func TestSourceStoreRegistryFailures(t *testing.T) {
 	t.Run("resolve fails for a reason that is not absence", func(t *testing.T) {
 		fr := newFakeRegistry(t, false)
 		defer fr.close()
-		c, _ := NewOCIClient(fr.base("go-pkgx/sources"))
+		c, _ := NewOCIClient(fr.base("go-zpkg/sources"))
 		fr.hook = func(r *http.Request) (int, bool) {
 			_, verb, _ := splitV2(r.URL.Path)
 			return 500, verb == "manifests"
@@ -241,7 +241,7 @@ func TestSourceStoreRegistryFailures(t *testing.T) {
 	t.Run("the manifest does not parse", func(t *testing.T) {
 		fr := newFakeRegistry(t, false)
 		defer fr.close()
-		c, _ := NewOCIClient(fr.base("go-pkgx/sources"))
+		c, _ := NewOCIClient(fr.base("go-zpkg/sources"))
 		if _, err := c.PushSource("acme.org/thing", data, ""); err != nil {
 			t.Fatal(err)
 		}
@@ -260,7 +260,7 @@ func TestSourceStoreRegistryFailures(t *testing.T) {
 func TestPinnedDigestAnswersWhatTheURLServed(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/sources"))
+	c, err := NewOCIClient(fr.base("go-zpkg/sources"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +290,7 @@ func TestPinnedDigestAnswersWhatTheURLServed(t *testing.T) {
 func TestPushWithNoURIRecordsNoPin(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/sources"))
+	c, err := NewOCIClient(fr.base("go-zpkg/sources"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func TestPushWithNoURIRecordsNoPin(t *testing.T) {
 func TestASecondPushMovesThePin(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/sources"))
+	c, err := NewOCIClient(fr.base("go-zpkg/sources"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +374,7 @@ func TestPinnedDigestFailures(t *testing.T) {
 	t.Run("a broken registry is not an absent pin", func(t *testing.T) {
 		fr := newFakeRegistry(t, false)
 		defer fr.close()
-		c, _ := NewOCIClient(fr.base("go-pkgx/sources"))
+		c, _ := NewOCIClient(fr.base("go-zpkg/sources"))
 		fr.hook = func(r *http.Request) (int, bool) {
 			_, verb, _ := splitV2(r.URL.Path)
 			return 500, verb == "manifests"
@@ -391,7 +391,7 @@ func TestPinnedDigestFailures(t *testing.T) {
 	t.Run("a pinned manifest that does not parse", func(t *testing.T) {
 		fr := newFakeRegistry(t, false)
 		defer fr.close()
-		c, _ := NewOCIClient(fr.base("go-pkgx/sources"))
+		c, _ := NewOCIClient(fr.base("go-zpkg/sources"))
 		if _, err := c.PushSource("acme.org/thing", data, uri); err != nil {
 			t.Fatal(err)
 		}
@@ -406,7 +406,7 @@ func TestPinnedDigestFailures(t *testing.T) {
 	t.Run("a pinned manifest with the wrong number of layers", func(t *testing.T) {
 		fr := newFakeRegistry(t, false)
 		defer fr.close()
-		c, _ := NewOCIClient(fr.base("go-pkgx/sources"))
+		c, _ := NewOCIClient(fr.base("go-zpkg/sources"))
 		if _, err := c.PushSource("acme.org/thing", data, uri); err != nil {
 			t.Fatal(err)
 		}
@@ -428,7 +428,7 @@ func TestPinnedDigestFailures(t *testing.T) {
 	t.Run("a pin whose layer is not sha256", func(t *testing.T) {
 		fr := newFakeRegistry(t, false)
 		defer fr.close()
-		c, _ := NewOCIClient(fr.base("go-pkgx/sources"))
+		c, _ := NewOCIClient(fr.base("go-zpkg/sources"))
 		if _, err := c.PushSource("acme.org/thing", data, uri); err != nil {
 			t.Fatal(err)
 		}
@@ -456,7 +456,7 @@ func TestPinnedDigestFailures(t *testing.T) {
 	t.Run("tagging the url fails", func(t *testing.T) {
 		fr := newFakeRegistry(t, false)
 		defer fr.close()
-		c, _ := NewOCIClient(fr.base("go-pkgx/sources"))
+		c, _ := NewOCIClient(fr.base("go-zpkg/sources"))
 		n := 0
 		fr.hook = func(r *http.Request) (int, bool) {
 			_, verb, ref := splitV2(r.URL.Path)

@@ -23,7 +23,7 @@ name: fuzz
 
 on:
   schedule:
-    # Monday 04:00 UTC, before the catalogue job in go-pkgx/packages so a
+    # Monday 04:00 UTC, before the catalogue job in go-zpkg/packages so a
     # finding here is on the screen before the week's publishing starts.
     - cron: "0 4 * * 1"
   workflow_dispatch:

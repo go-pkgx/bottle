@@ -40,9 +40,9 @@ func TestConfigValueTypes(t *testing.T) {
 // line comment
 /* block
    comment */
-PKGX_DIST   = "oci://ghcr.io/go-pkgx/packages"
+ZPKG_DIST   = "oci://ghcr.io/go-zpkg/packages"
 ESC         = "a\"b\\c\nd\te"
-PKGX_VERIFY = true
+ZPKG_VERIFY = true
 DISABLED    = false
 PORT        = 5000
 RATIO       = 1.5
@@ -50,9 +50,9 @@ EMPTY       = ""
 `)
 	setLookup(nil)
 	cases := map[string]string{
-		"PKGX_DIST":   "oci://ghcr.io/go-pkgx/packages",
+		"ZPKG_DIST":   "oci://ghcr.io/go-zpkg/packages",
 		"ESC":         "a\"b\\c\nd\te",
-		"PKGX_VERIFY": "true",
+		"ZPKG_VERIFY": "true",
 		"DISABLED":    "false",
 		"PORT":        "5000",
 		"RATIO":       "1.5",
@@ -73,25 +73,25 @@ EMPTY       = ""
 }
 
 func TestEnvPrecedence(t *testing.T) {
-	writeConfig(t, `PKGX_DIST = "fromfile"`)
+	writeConfig(t, `ZPKG_DIST = "fromfile"`)
 
 	// A real env var, set and non-empty, wins over the file.
-	setLookup(map[string]string{"PKGX_DIST": "fromenv"})
-	if got := Env("PKGX_DIST"); got != "fromenv" {
+	setLookup(map[string]string{"ZPKG_DIST": "fromenv"})
+	if got := Env("ZPKG_DIST"); got != "fromenv" {
 		t.Errorf("env should win: got %q", got)
 	}
 	// A present-but-empty env var falls back to the file.
-	setLookup(map[string]string{"PKGX_DIST": ""})
-	if got := Env("PKGX_DIST"); got != "fromfile" {
+	setLookup(map[string]string{"ZPKG_DIST": ""})
+	if got := Env("ZPKG_DIST"); got != "fromfile" {
 		t.Errorf("empty env should fall back to file: got %q", got)
 	}
 	// An absent env var falls back to the file.
 	setLookup(nil)
-	if got := Env("PKGX_DIST"); got != "fromfile" {
+	if got := Env("ZPKG_DIST"); got != "fromfile" {
 		t.Errorf("absent env should fall back to file: got %q", got)
 	}
 	// Absent everywhere → "".
-	if got := Env("PKGX_PANTRY"); got != "" {
+	if got := Env("ZPKG_PANTRY"); got != "" {
 		t.Errorf("absent everywhere = %q, want empty", got)
 	}
 }
@@ -99,7 +99,7 @@ func TestEnvPrecedence(t *testing.T) {
 func TestConfigMissingFile(t *testing.T) {
 	setConfigPath(t, filepath.Join(t.TempDir(), "does-not-exist.hcl2"))
 	setLookup(nil)
-	if got := Env("PKGX_DIST"); got != "" {
+	if got := Env("ZPKG_DIST"); got != "" {
 		t.Errorf("missing file Env = %q, want empty", got)
 	}
 	if err := ConfigError(); err != nil {
@@ -109,16 +109,16 @@ func TestConfigMissingFile(t *testing.T) {
 
 func TestConfigParseError(t *testing.T) {
 	writeConfig(t, `@@@ not valid hcl @@@`)
-	setLookup(map[string]string{"PKGX_DIST": "fromenv"})
+	setLookup(map[string]string{"ZPKG_DIST": "fromenv"})
 	if err := ConfigError(); err == nil {
 		t.Fatal("expected a parse error")
 	}
 	// A live env var still resolves despite the broken file.
-	if got := Env("PKGX_DIST"); got != "fromenv" {
+	if got := Env("ZPKG_DIST"); got != "fromenv" {
 		t.Errorf("env should still resolve on parse error: got %q", got)
 	}
 	// A file-only key falls back to "" (map stayed empty).
-	if got := Env("PKGX_PANTRY"); got != "" {
+	if got := Env("ZPKG_PANTRY"); got != "" {
 		t.Errorf("parse-error fallback = %q, want empty", got)
 	}
 }
@@ -134,7 +134,7 @@ func TestConfigBlockRejected(t *testing.T) {
 
 func TestConfigBadExpression(t *testing.T) {
 	// A bare identifier is a variable reference; with a nil EvalContext it errors.
-	writeConfig(t, `PKGX_DIST = somevar`)
+	writeConfig(t, `ZPKG_DIST = somevar`)
 	setLookup(nil)
 	if err := ConfigError(); err == nil {
 		t.Fatal("expected an error for an unresolvable expression")
@@ -143,7 +143,7 @@ func TestConfigBadExpression(t *testing.T) {
 
 func TestConfigUnsupportedType(t *testing.T) {
 	// A tuple is a valid HCL expression but not a scalar the tools accept.
-	writeConfig(t, `PKGX_DIST = ["a", "b"]`)
+	writeConfig(t, `ZPKG_DIST = ["a", "b"]`)
 	setLookup(nil)
 	if err := ConfigError(); err == nil {
 		t.Fatal("expected an error for a non-scalar value")
@@ -162,7 +162,7 @@ func TestConfigPathError(t *testing.T) {
 	if err := ConfigError(); err == nil {
 		t.Fatal("expected the configPathFn error to surface")
 	}
-	if got := Env("PKGX_DIST"); got != "" {
+	if got := Env("ZPKG_DIST"); got != "" {
 		t.Errorf("path error Env = %q, want empty", got)
 	}
 }
@@ -188,7 +188,7 @@ func TestConfigDefaultPath(t *testing.T) {
 	setLookup(nil)
 	t.Setenv("HOME", t.TempDir())
 	reloadConfig()
-	if got := Env("PKGX_DIST"); got != "" {
+	if got := Env("ZPKG_DIST"); got != "" {
 		t.Errorf("default-path Env = %q, want empty", got)
 	}
 	if err := ConfigError(); err != nil {

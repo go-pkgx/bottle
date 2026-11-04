@@ -336,10 +336,10 @@ func TestCatalogRefusesAnOversizedFile(t *testing.T) {
 // another. The s390x lane having a fraction of linux/x86-64's bottles is the
 // case this protects.
 func TestPublishAndFetchACatalogue(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0") // transport round-trip on an unsigned artefact
+	t.Setenv("ZPKG_VERIFY", "0") // transport round-trip on an unsigned artefact
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, err := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err != nil {
 		t.Fatal(err)
 	}

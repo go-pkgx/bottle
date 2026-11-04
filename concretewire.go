@@ -19,7 +19,7 @@ import (
 // a hash, and this annotation is what `pkgx ls` reads to print `+cuda ~mpi`.
 // That is the whole reason the `-glibc<X>` suffix could stop being a second
 // spelling of identity.
-const SpecAnnotation = "org.go-pkgx.spec"
+const SpecAnnotation = "org.go-zpkg.spec"
 
 // specJSON is the wire form. Field names are short because an OCI annotation
 // value travels in every manifest fetch, and explicit because a Go field

@@ -255,7 +255,7 @@ func TestBinNamesWithoutAVersionIsVerbatim(t *testing.T) {
 // change to the table is a change to this test too. It comes from our own
 // s390x artefacts — 362 `ld64.so.1 is NEEDED` in that lane's logs with no
 // `ld-linux-*.so` at all, and `readelf -l` on the published libc.so.6
-// (go-pkgx/bk#263).
+// (go-zpkg/bk#263).
 func TestLoaderNameForS390x(t *testing.T) {
 	if got := LoaderNameFor("s390x"); got != "ld64.so.1" {
 		t.Errorf("LoaderNameFor(s390x) = %q, want ld64.so.1", got)

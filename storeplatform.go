@@ -13,7 +13,7 @@ const StorePlatformFile = ".pkgx-platform"
 
 // MarkStorePlatform records, once, which platform a store holds.
 //
-// ⛔ IT NEVER FAILS A CALLER. A read-only $PKGX_DIR is somebody's deliberate
+// ⛔ IT NEVER FAILS A CALLER. A read-only $ZPKG_DIR is somebody's deliberate
 // arrangement — a materialised squashfs image on a compute node is exactly
 // that — and refusing to run because a note could not be left would break the
 // case this was written to help. An unwritable marker means the store simply
@@ -64,7 +64,7 @@ func StorePlatform(dir string) (osn, arch string, ok bool) {
 // to use it.
 //
 // ⛔ THE FAILURE IT REPLACES IS `Exec format error`, WITH NO EXPLANATION. A
-// prefix is `$PKGX_DIR/<project>/v<version>/…` with no platform in it, so a
+// prefix is `$ZPKG_DIR/<project>/v<version>/…` with no platform in it, so a
 // store shared over NFS between linux/x86-64 and linux/aarch64 holds whichever
 // architecture was installed last — `lib/libssl.so.3` is the same file name on
 // both — and the other architecture gets a kernel error naming nothing anybody
@@ -79,6 +79,6 @@ func CheckStorePlatform(dir, osn, arch string) error {
 	if !ok || (have == osn && haveArch == arch) {
 		return nil
 	}
-	return fmt.Errorf("store %s holds %s/%s bottles and this is %s/%s — one store cannot hold two architectures; give the platform a place in the path, e.g. PKGX_DIR=%s/{platform}",
+	return fmt.Errorf("store %s holds %s/%s bottles and this is %s/%s — one store cannot hold two architectures; give the platform a place in the path, e.g. ZPKG_DIR=%s/{platform}",
 		dir, have, haveArch, osn, arch, filepath.Dir(dir))
 }

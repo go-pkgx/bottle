@@ -17,11 +17,11 @@ import (
 // # THE MEASUREMENT THAT MADE THIS NECESSARY
 //
 // An anonymous client can ask ghcr what VERSIONS a project has and cannot ask
-// what PROJECTS exist. Measured against ghcr.io/go-pkgx/packages:
+// what PROJECTS exist. Measured against ghcr.io/go-zpkg/packages:
 //
 //	GET /v2/_catalog                               403  (no token issued)
-//	GET /v2/go-pkgx/packages/_catalog              403  (no token issued)
-//	GET /v2/go-pkgx/packages/zlib.net/tags/list    200  ["1.3.2", …]
+//	GET /v2/go-zpkg/packages/_catalog              403  (no token issued)
+//	GET /v2/go-zpkg/packages/zlib.net/tags/list    200  ["1.3.2", …]
 //
 // The registry API's catalogue endpoint is not served, so `gnu.org/<TAB>`
 // has nothing to read. Nix, Guix and Spack all answer this from a LOCAL
@@ -101,7 +101,7 @@ type CatalogProject struct {
 	//
 	// Here because it is the only metadata in this pantry a search can
 	// work on. Counted in the PUBLISHED catalogue of 2026-10-06, with
-	// `go run ./internal/catstat` in go-pkgx/pkgx, and the two platforms
+	// `go run ./internal/catstat` in go-zpkg/pkgx, and the two platforms
 	// agree: of 1908 projects, 1582 declare `provides` — 4592 command
 	// names on linux/aarch64, 4498 on darwin/aarch64 — and SIX carry a
 	// summary. `nix search` and `guix search` look in the description,
@@ -569,7 +569,7 @@ func UnmarshalCatalog(b []byte) (Catalog, error) {
 // CatalogProjectName is the reserved project the catalogue is published
 // under. A project name rather than a special path, because that is what
 // makes it an ordinary bottle.
-const CatalogProjectName = "go-pkgx.dev/catalog"
+const CatalogProjectName = "go-zpkg.github.io/catalog"
 
 // CatalogVersion is the version it is published as. One moving tag rather
 // than a dated series: a catalogue is a cache of the registry, every reader
@@ -682,7 +682,7 @@ func PublishCatalog(c *OCIClient, cat Catalog, osn, arch string) error {
 // round: a list of names is what a person then TYPES.
 //
 // Someone able to serve a forged catalogue — a compromised mirror, or a
-// PKGX_DIST pointed somewhere by a script — cannot make the install path
+// ZPKG_DIST pointed somewhere by a script — cannot make the install path
 // accept an unsigned bottle, because that path still verifies. What they
 // can do is decide what `<TAB>` offers, and a near-miss name offered at the
 // prompt is the whole of a typosquat. The attack is on the reader, not on

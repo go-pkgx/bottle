@@ -188,9 +188,9 @@ func fakeServer(t *testing.T, pkgs map[string]fakePkg) func() {
 	// The fixture is a static-HTTP dist serving UNSIGNED bottles, so the
 	// fail-closed check refuses every install through it — correctly, now that
 	// the install path enforces it too. Tests that exercise verification itself
-	// set PKGX_VERIFY back on explicitly.
-	t.Setenv("PKGX_VERIFY", "0")
-	// PantryOverlay defaults to the LIVE go-pkgx/pantry-overlay and is consulted
+	// set ZPKG_VERIFY back on explicitly.
+	t.Setenv("ZPKG_VERIFY", "0")
+	// PantryOverlay defaults to the LIVE go-zpkg/pantry-overlay and is consulted
 	// BEFORE PantryBase, so leaving it set meant a fixture recipe was silently
 	// replaced by the real one for any project the overlay happens to carry.
 	// gnu.org/help2man entered the overlay on 2026-09-12 and TestFetchRuntimeEnv
@@ -272,13 +272,13 @@ func TestVersionsForOCIEmptyFallsBackToUpstream(t *testing.T) {
 	// The repo exists but carries no tags → ListTags returns an empty slice, no
 	// error (the exact shape a not-yet-mirrored build-dep produces on ghcr).
 	fr.mu.Lock()
-	fr.tags["go-pkgx/packages/llvm.org"] = map[string]bool{}
+	fr.tags["go-zpkg/packages/llvm.org"] = map[string]bool{}
 	fr.mu.Unlock()
 
 	up, hits := upstreamVersionsServer(t, "llvm.org", "linux", "aarch64",
 		[]string{"16.0.6", "18.1.8", "20.1.0"})
 	oldDist, oldUp := DistBase, UpstreamDist
-	DistBase, UpstreamDist = fr.base("go-pkgx/packages"), up
+	DistBase, UpstreamDist = fr.base("go-zpkg/packages"), up
 	defer func() { DistBase, UpstreamDist = oldDist, oldUp; resetOCICache() }()
 	resetOCICache()
 
@@ -308,10 +308,10 @@ func TestVersionsForOCIEmptyFallsBackToUpstream(t *testing.T) {
 // TestVersionsForOCINonEmptyShortCircuits: when the OCI registry has versions,
 // VersionsFor returns them and never consults the upstream dist.
 func TestVersionsForOCINonEmptyShortCircuits(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/packages"))
+	c, err := NewOCIClient(fr.base("go-zpkg/packages"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestVersionsForOCINonEmptyShortCircuits(t *testing.T) {
 	}
 	up, hits := upstreamVersionsServer(t, "acme.org/tool", "linux", "aarch64", []string{"9.9.9"})
 	oldDist, oldUp := DistBase, UpstreamDist
-	DistBase, UpstreamDist = fr.base("go-pkgx/packages"), up
+	DistBase, UpstreamDist = fr.base("go-zpkg/packages"), up
 	defer func() { DistBase, UpstreamDist = oldDist, oldUp; resetOCICache() }()
 	resetOCICache()
 
@@ -339,14 +339,14 @@ func TestVersionsForOCIEmptyUpstreamError(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
 	fr.mu.Lock()
-	fr.tags["go-pkgx/packages/ghost.org"] = map[string]bool{}
+	fr.tags["go-zpkg/packages/ghost.org"] = map[string]bool{}
 	fr.mu.Unlock()
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", 500)
 	}))
 	defer up.Close()
 	oldDist, oldUp := DistBase, UpstreamDist
-	DistBase, UpstreamDist = fr.base("go-pkgx/packages"), up.URL
+	DistBase, UpstreamDist = fr.base("go-zpkg/packages"), up.URL
 	defer func() { DistBase, UpstreamDist = oldDist, oldUp; resetOCICache() }()
 	resetOCICache()
 	if _, err := VersionsFor("ghost.org", "linux", "aarch64"); err == nil {
@@ -449,7 +449,7 @@ func TestInstallBottleConcurrent(t *testing.T) {
 	})()
 	dir := t.TempDir()
 	r := Resolved{"acme.org/tool", ParseVer("1.0.0")}
-	// Many workers install the same bottle into one PKGX_DIR at once.
+	// Many workers install the same bottle into one ZPKG_DIR at once.
 	errs := make(chan error, 12)
 	for i := 0; i < 12; i++ {
 		go func() { _, e := Install(r, dir); errs <- e }()
@@ -481,7 +481,7 @@ func TestInstallBottleXZFallback(t *testing.T) {
 }
 
 func TestFetchBottleServerError(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0") // status-code path: an HTTP dist is unverifiable by design
+	t.Setenv("ZPKG_VERIFY", "0") // status-code path: an HTTP dist is unverifiable by design
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", 500)
 	}))
@@ -509,14 +509,14 @@ func TestHTTPGetError(t *testing.T) {
 }
 
 func TestDirDefault(t *testing.T) {
-	// Empty config so PKGX_DIR resolution depends only on the environment.
+	// Empty config so ZPKG_DIR resolution depends only on the environment.
 	setConfigPath(t, filepath.Join(t.TempDir(), "absent.hcl2"))
-	t.Setenv("PKGX_DIR", "")
+	t.Setenv("ZPKG_DIR", "")
 	t.Setenv("HOME", "/tmp/homeX")
 	if got := Dir(); got != "/tmp/homeX/.pkgx" {
 		t.Errorf("default Dir = %q", got)
 	}
-	t.Setenv("PKGX_DIR", "/custom")
+	t.Setenv("ZPKG_DIR", "/custom")
 	if got := Dir(); got != "/custom" {
 		t.Errorf("env Dir = %q", got)
 	}
@@ -710,7 +710,7 @@ func TestApplyEnvOverlay(t *testing.T) {
 	defer func() { PantryOverlay = ob }()
 	PantryOverlay = ""
 	applyEnv(func(k string) string {
-		if k == "PKGX_PANTRY_OVERLAY" {
+		if k == "ZPKG_PANTRY_OVERLAY" {
 			return "https://ov.example/projects/"
 		}
 		return ""
@@ -729,12 +729,12 @@ func TestApplyEnvOverlay(t *testing.T) {
 func TestOverlayDefaultsToOurs(t *testing.T) {
 	ob := PantryOverlay
 	defer func() { PantryOverlay = ob }()
-	PantryOverlay = "https://raw.githubusercontent.com/go-pkgx/pantry-overlay/main/projects"
+	PantryOverlay = "https://raw.githubusercontent.com/go-zpkg/pantry-overlay/main/projects"
 	applyEnv(func(string) string { return "" })
 	if PantryOverlay == "" {
-		t.Fatal("an unset PKGX_PANTRY_OVERLAY turned the overlay off")
+		t.Fatal("an unset ZPKG_PANTRY_OVERLAY turned the overlay off")
 	}
-	if !strings.Contains(PantryOverlay, "go-pkgx/pantry-overlay") {
+	if !strings.Contains(PantryOverlay, "go-zpkg/pantry-overlay") {
 		t.Errorf("PantryOverlay = %q, want our overlay", PantryOverlay)
 	}
 }
@@ -747,7 +747,7 @@ func TestOverlayCanBeTurnedOff(t *testing.T) {
 	defer func() { PantryOverlay = ob }()
 	PantryOverlay = "https://ov.example/projects"
 	applyEnv(func(k string) string {
-		if k == "PKGX_PANTRY_OVERLAY" {
+		if k == "ZPKG_PANTRY_OVERLAY" {
 			return "none"
 		}
 		return ""
@@ -898,7 +898,7 @@ func TestHTTPGetRetriesTransient(t *testing.T) {
 func TestInstallForTargetPlatform(t *testing.T) {
 	setGoos(t, "darwin")
 	setGoarch(t, "aarch64")
-	t.Setenv("PKGX_VERIFY", "0") // a bare HTTP fixture carries no signatures
+	t.Setenv("ZPKG_VERIFY", "0") // a bare HTTP fixture carries no signatures
 
 	tarball := makeBottleGz(t, "tool.org", "1.0.0", map[string]string{"bin/tool": "x"})
 	var asked []string
@@ -946,7 +946,7 @@ func TestInstallForTargetPlatform(t *testing.T) {
 func TestPickVersionForSkipsUnpublishedPlatform(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	oldDist, oldUp := DistBase, UpstreamDist
-	base := fr.base("go-pkgx/bottles")
+	base := fr.base("go-zpkg/bottles")
 	DistBase = base
 	// Any fallback to the upstream dist would mask the behaviour under test.
 	UpstreamDist = "https://upstream.invalid"
@@ -993,14 +993,14 @@ func TestPickVersionForSkipsUnpublishedPlatform(t *testing.T) {
 // the bytes and the REGISTRY still says whether they are the right ones.
 //
 // The cache exists because staging a sovereign rootfs pulls ~2 GiB per job. It
-// must not become PKGX_DIST: zot cannot list the tags of a repository it has
+// must not become ZPKG_DIST: zot cannot list the tags of a repository it has
 // not synced, so resolution would fall back to the upstream dist and ask for a
 // VERSION where our registry uses a TAG — gnu.org/bash is published as `5.3`,
 // not `5.3.0` — and the pull 404s on a tag that never existed.
 func TestFetchBottleUsesCacheButTrustsTheRegistry(t *testing.T) {
 	real := newFakeRegistry(t, false)
 	cache := newFakeRegistry(t, false)
-	realBase, cacheBase := real.base("go-pkgx/bottles"), cache.base("go-pkgx/bottles")
+	realBase, cacheBase := real.base("go-zpkg/bottles"), cache.base("go-zpkg/bottles")
 
 	kp, err := sign.Generate()
 	if err != nil {
@@ -1049,7 +1049,7 @@ func TestFetchBottleUsesCacheButTrustsTheRegistry(t *testing.T) {
 	}
 
 	// A cache that does not carry it must not fail the install — the registry does.
-	CacheBase = cache.base("go-pkgx/empty")
+	CacheBase = cache.base("go-zpkg/empty")
 	resetOCICache()
 	if !bytes.Equal(read("cache miss"), body) {
 		t.Error("a cache miss did not fall back to the registry")
@@ -1059,12 +1059,12 @@ func TestFetchBottleUsesCacheButTrustsTheRegistry(t *testing.T) {
 	// instead. This is the property that makes the cache safe to add at all:
 	// it is an optimisation, never an authority.
 	other := newFakeRegistry(t, false)
-	oc, err := NewOCIClient(other.base("go-pkgx/bottles"))
+	oc, err := NewOCIClient(other.base("go-zpkg/bottles"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	pushSignedBottle(t, oc, "c.test", kp, makeGzTarball("tampered"), true)
-	CacheBase = other.base("go-pkgx/bottles")
+	CacheBase = other.base("go-zpkg/bottles")
 	resetOCICache()
 	if !bytes.Equal(read("tampered cache"), body) {
 		t.Error("a cache serving different bytes was trusted")
@@ -1130,7 +1130,7 @@ func TestFetchRuntimeEnvPlatformBlock(t *testing.T) {
 // depending on tar.
 func TestPickVersionForTriesEveryTagSpelling(t *testing.T) {
 	fr := newFakeRegistry(t, false)
-	base := fr.base("go-pkgx/bottles")
+	base := fr.base("go-zpkg/bottles")
 	old := DistBase
 	DistBase = base
 	resetOCICache()
@@ -1226,11 +1226,11 @@ func makeGzTarballAt(path, body string) []byte {
 // after PickVersionFor had correctly found the linux tag.
 func TestInstallForBottlePublishedUnderAnotherSpelling(t *testing.T) {
 	fr := newFakeRegistry(t, false)
-	base := fr.base("go-pkgx/bottles")
+	base := fr.base("go-zpkg/bottles")
 	old := DistBase
 	DistBase = base
 	resetOCICache()
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	t.Cleanup(func() { DistBase = old; resetOCICache() })
 
 	c, err := NewOCIClient(base)
@@ -1642,7 +1642,7 @@ func TestVersionsForSourcedExplainsBothFallbacks(t *testing.T) {
 	}))
 	defer up.Close()
 
-	withDist(t, "oci://"+strings.TrimPrefix(reg.URL, "http://")+"/go-pkgx/packages")
+	withDist(t, "oci://"+strings.TrimPrefix(reg.URL, "http://")+"/go-zpkg/packages")
 	oldUp := UpstreamDist
 	UpstreamDist = up.URL
 	t.Cleanup(func() { UpstreamDist = oldUp })

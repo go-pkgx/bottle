@@ -15,7 +15,7 @@ import (
 // ghcr spells the first one as 403 at the token endpoint for a repository
 // that does not exist. A user met that raw:
 //
-//	pkgx: … is not published in ghcr.io/go-pkgx/packages/… :
+//	pkgx: … is not published in ghcr.io/go-zpkg/packages/… :
 //	      response status code 403: denied: requested access to the
 //	      resource is denied
 //
@@ -39,7 +39,7 @@ func TestATypeCannotBeMatchedByAccident(t *testing.T) {
 	stray := errors.New("command not found in the requested packages: true")
 	np := &NotPublishedError{
 		Project:  "opendev.org/openstack/python-openstackclient",
-		Registry: "ghcr.io", Repo: "go-pkgx/packages/opendev.org/…",
+		Registry: "ghcr.io", Repo: "go-zpkg/packages/opendev.org/…",
 		Err: errors.New("403: denied"),
 	}
 

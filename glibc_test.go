@@ -115,17 +115,17 @@ func TestHostKernel(t *testing.T) {
 	})
 }
 
-// TestGlibcConstraintPin: PKGX_GLIBC pins an exact glibc (with or without the
+// TestGlibcConstraintPin: ZPKG_GLIBC pins an exact glibc (with or without the
 // leading '='), and the answer is memoised.
 func TestGlibcConstraintPin(t *testing.T) {
 	for _, pin := range []string{"2.27.0", "=2.27.0", " 2.27.0 "} {
-		withGlibcEnv(t, map[string]string{"PKGX_GLIBC": pin})
+		withGlibcEnv(t, map[string]string{"ZPKG_GLIBC": pin})
 		if got := GlibcConstraint(); got != "=2.27.0" {
-			t.Fatalf("PKGX_GLIBC=%q → %q", pin, got)
+			t.Fatalf("ZPKG_GLIBC=%q → %q", pin, got)
 		}
 	}
 	// memoised: a later change to the environment does not re-resolve
-	withGlibcEnv(t, map[string]string{"PKGX_GLIBC": "2.27.0"})
+	withGlibcEnv(t, map[string]string{"ZPKG_GLIBC": "2.27.0"})
 	_ = GlibcConstraint()
 	lookupEnv = func(string) (string, bool) { return "2.44.0", true }
 	if got := GlibcConstraint(); got != "=2.27.0" {
@@ -228,7 +228,7 @@ func TestGlibcSelectionVersionListingFails(t *testing.T) {
 // TestImplicitRootsUsesGlibcConstraint proves the selector actually reaches
 // closure completion (where every dynamic ELF gets its loader + libc).
 func TestImplicitRootsUsesGlibcConstraint(t *testing.T) {
-	withGlibcEnv(t, map[string]string{"PKGX_GLIBC": "2.27.0"})
+	withGlibcEnv(t, map[string]string{"ZPKG_GLIBC": "2.27.0"})
 	if got := implicitRoots(nil)[GlibcProject]; got != "=2.27.0" {
 		t.Fatalf("glibc root = %q", got)
 	}
@@ -252,7 +252,7 @@ func TestGlibcMinKernelOf(t *testing.T) {
 	t.Run("published glibc", func(t *testing.T) {
 		fr := newFakeRegistry(t, false)
 		defer fr.close()
-		withDist(t, fr.base("go-pkgx/bottles"))
+		withDist(t, fr.base("go-zpkg/bottles"))
 		c, err := NewOCIClient(DistBase)
 		if err != nil {
 			t.Fatal(err)
@@ -277,7 +277,7 @@ func TestGlibcMinKernelOf(t *testing.T) {
 func TestOCIClientAnnotations(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, err := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func TestOCIClientAnnotations(t *testing.T) {
 func TestOCIVersionsSkipFlavoredTags(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	withDist(t, fr.base("go-pkgx/bottles"))
+	withDist(t, fr.base("go-zpkg/bottles"))
 	c, err := NewOCIClient(DistBase)
 	if err != nil {
 		t.Fatal(err)
@@ -329,7 +329,7 @@ func TestOCIVersionsSkipFlavoredTags(t *testing.T) {
 func TestOCIVersionsSkipReferrerTags(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	withDist(t, fr.base("go-pkgx/bottles"))
+	withDist(t, fr.base("go-zpkg/bottles"))
 	c, err := NewOCIClient(DistBase)
 	if err != nil {
 		t.Fatal(err)
@@ -406,7 +406,7 @@ func TestVersionsForGhcrAnonymous403(t *testing.T) {
 			oldUp := UpstreamDist
 			UpstreamDist = up
 			t.Cleanup(func() { UpstreamDist = oldUp })
-			withDist(t, fr.base("go-pkgx/packages"))
+			withDist(t, fr.base("go-zpkg/packages"))
 
 			before := *hits
 			vs, err := VersionsFor("absent.org", "linux", "x86-64")
@@ -432,7 +432,7 @@ func TestVersionsForGhcrAnonymous403(t *testing.T) {
 	}
 }
 
-// TestFlavoredTagSelection: a host that pinned PKGX_GLIBC takes the build made
+// TestFlavoredTagSelection: a host that pinned ZPKG_GLIBC takes the build made
 // against THAT glibc — the `<version>-glibc<ver>` tag — while the version, the
 // constraint matching and the installed prefix all stay the plain version. Any
 // other flavor is never a candidate.
@@ -472,10 +472,10 @@ func TestFlavoredTagSelection(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			withGlibcEnv(t, map[string]string{"PKGX_GLIBC": tc.pin})
+			withGlibcEnv(t, map[string]string{"ZPKG_GLIBC": tc.pin})
 			fr := newFakeRegistry(t, false)
 			defer fr.close()
-			withDist(t, fr.base("go-pkgx/bottles"))
+			withDist(t, fr.base("go-zpkg/bottles"))
 			c, err := NewOCIClient(DistBase)
 			if err != nil {
 				t.Fatal(err)

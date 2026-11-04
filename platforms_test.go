@@ -36,7 +36,7 @@ func plat(os, arch string) *ocispec.Platform {
 
 // ⛔ THE QUESTION NOTHING COULD ASK. `HasPlatform` answers "is THIS one
 // published", one guess at a time; nothing answered "which are". Measured
-// 2026-10-20, go-pkgx/packages' daily CVE lane carried its platform list in
+// 2026-10-20, go-zpkg/packages' daily CVE lane carried its platform list in
 // the workflow file, the list said two, and the registry published six —
 // the four nobody asked about were clean, so the cost was coverage rather
 // than an exposure, and the mechanism guaranteed the next one would be
@@ -44,13 +44,13 @@ func plat(os, arch string) *ocispec.Platform {
 func TestPlatformsListsWhatTheIndexPublishes(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/packages"))
+	c, err := NewOCIClient(fr.base("go-zpkg/packages"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	// The six the registry really carries, in a deliberately unsorted order
 	// and with one repeated: an index's order is not ours to rely on.
-	fr.injectManifest("go-pkgx/packages/go-pkgx.dev/catalog", "1", ocispec.MediaTypeImageIndex,
+	fr.injectManifest("go-zpkg/packages/go-zpkg.github.io/catalog", "1", ocispec.MediaTypeImageIndex,
 		indexWith(t, []*ocispec.Platform{
 			plat("linux", "amd64"),
 			plat("darwin", "arm64"),
@@ -61,7 +61,7 @@ func TestPlatformsListsWhatTheIndexPublishes(t *testing.T) {
 			plat("linux", "amd64"), // the same platform twice
 		}))
 
-	got, err := c.Platforms("go-pkgx.dev/catalog", "1")
+	got, err := c.Platforms("go-zpkg.github.io/catalog", "1")
 	if err != nil {
 		t.Fatalf("Platforms: %v", err)
 	}
@@ -116,8 +116,8 @@ func TestIsVersionTagIsReachableAndKeepsItsRule(t *testing.T) {
 func TestPlatformsSkipsWhatIsNotAPlatform(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/packages"))
-	fr.injectManifest("go-pkgx/packages/p", "1", ocispec.MediaTypeImageIndex,
+	c, _ := NewOCIClient(fr.base("go-zpkg/packages"))
+	fr.injectManifest("go-zpkg/packages/p", "1", ocispec.MediaTypeImageIndex,
 		indexWith(t, []*ocispec.Platform{
 			plat("linux", "amd64"),
 			nil,                        // a descriptor with no platform
@@ -140,8 +140,8 @@ func TestPlatformsSkipsWhatIsNotAPlatform(t *testing.T) {
 func TestPlatformsKeepsAVariant(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/packages"))
-	fr.injectManifest("go-pkgx/packages/p", "1", ocispec.MediaTypeImageIndex,
+	c, _ := NewOCIClient(fr.base("go-zpkg/packages"))
+	fr.injectManifest("go-zpkg/packages/p", "1", ocispec.MediaTypeImageIndex,
 		indexWith(t, []*ocispec.Platform{
 			{OS: "linux", Architecture: "arm", Variant: "v7"},
 			{OS: "linux", Architecture: "arm", Variant: "v6"},
@@ -167,10 +167,10 @@ func TestPlatformsKeepsAVariant(t *testing.T) {
 func TestPlatformsRefusesToReportNothing(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/packages"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/packages"))
 
 	// An index whose every entry is an attestation: real shape, no platforms.
-	fr.injectManifest("go-pkgx/packages/none", "1", ocispec.MediaTypeImageIndex,
+	fr.injectManifest("go-zpkg/packages/none", "1", ocispec.MediaTypeImageIndex,
 		indexWith(t, []*ocispec.Platform{plat("unknown", "unknown"), nil}))
 	if got, err := c.Platforms("none", "1"); err == nil {
 		t.Errorf("an index naming no platform returned %v and no error", got)
@@ -180,7 +180,7 @@ func TestPlatformsRefusesToReportNothing(t *testing.T) {
 
 	// A single manifest cannot answer the question either, and saying so
 	// beats returning the host's own platform as if the registry had said it.
-	fr.injectManifest("go-pkgx/packages/single", "1", ocispec.MediaTypeImageManifest,
+	fr.injectManifest("go-zpkg/packages/single", "1", ocispec.MediaTypeImageManifest,
 		[]byte(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{"mediaType":"application/vnd.oci.empty.v1+json","digest":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a","size":2},"layers":[]}`))
 	if got, err := c.Platforms("single", "1"); err == nil {
 		t.Errorf("a single manifest returned %v and no error", got)

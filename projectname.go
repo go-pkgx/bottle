@@ -19,7 +19,7 @@ import (
 // the normalised one, which Go's client follows by default. Measured, not
 // reasoned about:
 //
-//	httpGet(".../pkgxdev/pantry/main/projects/../../../../go-pkgx/pantry-overlay/main/README.md")
+//	httpGet(".../pkgxdev/pantry/main/projects/../../../../go-zpkg/pantry-overlay/main/README.md")
 //	→ 1270 bytes of ANOTHER REPOSITORY'S file
 //
 // A recipe is not inert. It declares dependencies, a build script and the

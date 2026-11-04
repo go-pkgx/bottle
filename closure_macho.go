@@ -238,7 +238,7 @@ func unresolvedRefs(prefixes []string, dir string) []want {
 					//
 					// This does not resolve them; naming a project from a
 					// bare soname needs the index provideMachoSoname reads
-					// (go-pkgx/bottle#166). It stops the gap being silent,
+					// (go-zpkg/bottle#166). It stops the gap being silent,
 					// which is the part that let it reach 1266.
 					warn("%s is NEEDED, is not in the store, and names no project directory — "+
 						"this cannot look for a provider, so it will not resolve", ref)

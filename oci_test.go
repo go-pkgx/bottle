@@ -274,10 +274,10 @@ func resetOCICache() {
 }
 
 func TestOCIRoundTripPushPull(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0") // transport round-trip on unsigned bottles
+	t.Setenv("ZPKG_VERIFY", "0") // transport round-trip on unsigned bottles
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	base := fr.base("go-pkgx/bottles")
+	base := fr.base("go-zpkg/bottles")
 
 	c, err := NewOCIClient(base)
 	if err != nil {
@@ -323,10 +323,10 @@ func TestOCIRoundTripPushPull(t *testing.T) {
 }
 
 func TestOCIAuthChallengeFlow(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0")   // transport/auth test on unsigned bottles
+	t.Setenv("ZPKG_VERIFY", "0")   // transport/auth test on unsigned bottles
 	fr := newFakeRegistry(t, true) // require bearer token
 	defer fr.close()
-	base := fr.base("go-pkgx/bottles")
+	base := fr.base("go-zpkg/bottles")
 	c, err := NewOCIClient(base)
 	if err != nil {
 		t.Fatal(err)
@@ -364,7 +364,7 @@ func TestOCIListVersionsMissingRepo(t *testing.T) {
 	// "rust-lang.org" is absent from fr.tags → the tag listing 404s.
 	up, hits := upstreamVersionsServer(t, "rust-lang.org", "linux", "x86-64", []string{"1.88.0", "1.90.0"})
 	oldDist, oldUp := DistBase, UpstreamDist
-	DistBase, UpstreamDist = fr.base("go-pkgx/packages"), up
+	DistBase, UpstreamDist = fr.base("go-zpkg/packages"), up
 	defer func() { DistBase, UpstreamDist = oldDist, oldUp; resetOCICache() }()
 	resetOCICache()
 
@@ -388,7 +388,7 @@ func TestVersionsForOCIErrorPropagates(t *testing.T) {
 	defer fr.close()
 	fr.hook = func(*http.Request) (int, bool) { return http.StatusInternalServerError, true }
 	oldDist := DistBase
-	DistBase = fr.base("go-pkgx/packages")
+	DistBase = fr.base("go-zpkg/packages")
 	defer func() { DistBase = oldDist; resetOCICache() }()
 	resetOCICache()
 	if _, err := VersionsFor("acme.org/tool", "linux", "x86-64"); err == nil {
@@ -399,7 +399,7 @@ func TestVersionsForOCIErrorPropagates(t *testing.T) {
 func TestOCIRepushIsIdempotent(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	data := makeGzTarball("idem")
 	if err := c.Push("idem.test", "1.0.0", "linux", "x86-64", data, ".tar.gz"); err != nil {
 		t.Fatal(err)
@@ -415,7 +415,7 @@ func TestNewOCIClientParsing(t *testing.T) {
 		base, host, repo string
 		plain            bool
 	}{
-		{"oci://ghcr.io/go-pkgx/bottles", "ghcr.io", "go-pkgx/bottles", false},
+		{"oci://ghcr.io/go-zpkg/bottles", "ghcr.io", "go-zpkg/bottles", false},
 		{"oci://localhost:5000/x/y", "localhost:5000", "x/y", true},
 		{"oci://127.0.0.1:8080/b", "127.0.0.1:8080", "b", true},
 		{"oci://http://reg.internal/b", "reg.internal", "b", true},
@@ -431,8 +431,8 @@ func TestNewOCIClientParsing(t *testing.T) {
 			t.Errorf("%s -> host=%q repo=%q plain=%v", tc.base, c.host, c.repoBase, c.plainHTTP)
 		}
 	}
-	c, _ := newOCIClientEnv("oci://ghcr.io/go-pkgx/bottles", func(string) string { return "" })
-	if got := c.repoName("OpenSSL.org"); got != "go-pkgx/bottles/openssl.org" {
+	c, _ := newOCIClientEnv("oci://ghcr.io/go-zpkg/bottles", func(string) string { return "" })
+	if got := c.repoName("OpenSSL.org"); got != "go-zpkg/bottles/openssl.org" {
 		t.Errorf("repoName() = %q", got)
 	}
 	if _, err := NewOCIClient("https://not-oci"); err == nil {
@@ -512,7 +512,7 @@ func TestIsIndexMediaSniff(t *testing.T) {
 func TestOCIPushReferrers(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, err := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,7 +551,7 @@ func TestOCIPushReferrers(t *testing.T) {
 func TestOCIReferrerBlobFailure(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	sbom := []byte(`{"bomFormat":"CycloneDX"}`)
 	sbomDigest := sha256hex(sbom)
 	// fail exactly the referrer blob upload → pushReferrer blob error → push error
@@ -585,7 +585,7 @@ func clobberIndexTo(t *testing.T, c *OCIClient, project, ver string) {
 func TestOCIIndexReconcilesConcurrentClobber(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 
 	oldB, oldH := indexRetryBackoff, afterTagHook
 	indexRetryBackoff = func(int) {}
@@ -623,7 +623,7 @@ func TestOCIIndexReconcilesConcurrentClobber(t *testing.T) {
 func TestOCIIndexReconcileGivesUp(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 
 	oldA, oldB, oldH := indexRetryAttempts, indexRetryBackoff, afterTagHook
 	indexRetryAttempts, indexRetryBackoff = 2, func(int) {}
@@ -639,7 +639,7 @@ func TestOCIIndexReconcileGivesUp(t *testing.T) {
 func TestOCIIndexTagFailure(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	// Fail the PUT that tags the version index (manifests/<tag>); per-platform
 	// manifests and blobs are addressed by digest, so only the tag write fails.
 	fr.hook = func(r *http.Request) (int, bool) {
@@ -654,7 +654,7 @@ func TestOCIIndexTagFailure(t *testing.T) {
 func TestOCIIndexMarshalError(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 
 	old := marshalIndex
 	marshalIndex = func(ocispec.Index) ([]byte, error) { return nil, fmt.Errorf("boom") }
@@ -667,7 +667,7 @@ func TestOCIIndexMarshalError(t *testing.T) {
 func TestOCIReferrersServerError(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	manDesc, err := c.PushWithReferrers("srv.err", "1", "linux", "x86-64", makeGzTarball("y"), ".tar.gz", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -684,7 +684,7 @@ func TestOCIReferrersServerError(t *testing.T) {
 func TestOCIReferrersErrors(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	// a bad project name makes repository() (remote.NewRepository) fail for both
 	// pushReferrer's caller and Referrers.
 	bad := "BAD..name/../x"
@@ -721,7 +721,7 @@ func TestUpsertPlatform(t *testing.T) {
 func TestOCIPushAnnotated(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, err := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -763,7 +763,7 @@ func TestOCIPushAnnotated(t *testing.T) {
 // TestOCIHasPlatform: the pure-Go published-check (skip logic for the factory).
 func TestOCIHasPlatform(t *testing.T) {
 	fr := newFakeRegistry(t, false)
-	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, err := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -809,7 +809,7 @@ func TestOCIHasPlatform(t *testing.T) {
 func TestOCIIndexSurvivesALateClobber(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 
 	oldB, oldS, oldH := indexRetryBackoff, indexSettle, afterTagHook
 	indexRetryBackoff, afterTagHook = func(int) {}, nil

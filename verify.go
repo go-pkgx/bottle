@@ -13,18 +13,18 @@ import (
 
 // VerifyRequired reports whether fail-closed signature verification is demanded
 // when installing. It is **on by default** (secure by default): only an explicit
-// PKGX_VERIFY=0/false/no/off opts out. Anything else — unset, 1/true/yes/on, or
+// ZPKG_VERIFY=0/false/no/off opts out. Anything else — unset, 1/true/yes/on, or
 // an unrecognised value — keeps verification on. The value is read through Env,
 // so it may come from a real environment variable or from ~/.pkgx/config.hcl2.
 func VerifyRequired() bool {
-	switch strings.ToLower(strings.TrimSpace(Env("PKGX_VERIFY"))) {
+	switch strings.ToLower(strings.TrimSpace(Env("ZPKG_VERIFY"))) {
 	case "0", "false", "no", "off":
 		return false
 	}
 	return true
 }
 
-// SigningPublicKey is the go-pkgx bottle signing key (minisign format). A signed
+// SigningPublicKey is the go-zpkg bottle signing key (minisign format). A signed
 // bottle carries a cosign-style signature referrer whose signature verifies
 // against this key; verification is fail-closed. It is a var (not const) only so
 // tests can substitute a throwaway key.
@@ -44,8 +44,8 @@ const (
 	// bottle on its per-platform manifest: the exact glibc it was built against,
 	// and (for the glibc bottle itself) glibc's min supported kernel from
 	// .note.ABI-tag. A glibc-aware resolver/selector reads these.
-	GlibcVersionAnnotation   = "org.go-pkgx.glibc.version"
-	GlibcMinKernelAnnotation = "org.go-pkgx.glibc.min-kernel"
+	GlibcVersionAnnotation   = "org.go-zpkg.glibc.version"
+	GlibcMinKernelAnnotation = "org.go-zpkg.glibc.min-kernel"
 )
 
 // VerifySignature checks a cosign simple-signing signature over a bottle

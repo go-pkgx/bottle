@@ -131,10 +131,10 @@ func TestWriteABILinksRefusesAPath(t *testing.T) {
 // PlatformAnnotations reads back what a publish attached, from the
 // per-platform manifest and not from a mirror.
 func TestPlatformAnnotations(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, err := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err != nil {
 		t.Fatal(err)
 	}

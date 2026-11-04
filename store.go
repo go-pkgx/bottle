@@ -14,7 +14,7 @@ import (
 // # WHY IT WAS WORTH WRITING
 //
 // Every ephemeral `pkgx <pkg>` leaves its bottles in
-// $PKGX_DIR/<project>/v<version>, and nothing ever removes one. `pkgm list`
+// $ZPKG_DIR/<project>/v<version>, and nothing ever removes one. `pkgm list`
 // lists INSTALLATIONS, which is a different set: it answers "what did I ask
 // for", not "what is on this disk".
 //

@@ -8,7 +8,7 @@ package bottle
 // an old kernel: glibc bakes its `--enable-kernel` floor into libc.so.6's
 // .note.ABI-tag and the loader REFUSES to run below it — the HPC case, where a
 // login node still runs a 3.10 kernel. Our factory stamps that floor as the
-// org.go-pkgx.glibc.min-kernel annotation when it publishes a glibc bottle, so
+// org.go-zpkg.glibc.min-kernel annotation when it publishes a glibc bottle, so
 // a client can read it from the registry without downloading anything: pick the
 // newest published glibc the running kernel can actually run.
 //
@@ -16,7 +16,7 @@ package bottle
 // fits (every modern machine), or if the registry carries no floor to compare
 // against, resolution is left exactly as it was.
 //
-// PKGX_GLIBC=<version> pins one explicitly instead. That is the consumer side of
+// ZPKG_GLIBC=<version> pins one explicitly instead. That is the consumer side of
 // `bk factory --glibc <version>`, which builds a whole stack against one glibc.
 
 import (
@@ -72,25 +72,25 @@ var (
 
 // GlibcConstraint is the constraint gnu.org/glibc is resolved with when a
 // closure needs the C library: an exact "=<version>" when a glibc has been
-// pinned (PKGX_GLIBC) or chosen for this host's kernel, else "*" (newest).
+// pinned (ZPKG_GLIBC) or chosen for this host's kernel, else "*" (newest).
 func GlibcConstraint() string {
 	glibcOnce.Do(func() { glibcPin = resolveGlibcConstraint() })
 	return glibcPin
 }
 
 // resetGlibcConstraint clears the cache; for tests and for a consumer that
-// re-points PKGX_DIST at runtime.
+// re-points ZPKG_DIST at runtime.
 func resetGlibcConstraint() {
 	glibcOnce = sync.Once{}
 	glibcPin = ""
 }
 
-// GlibcFlavor is the glibc build variant this host asks for: the PKGX_GLIBC
+// GlibcFlavor is the glibc build variant this host asks for: the ZPKG_GLIBC
 // pin, or "" for ordinary builds. A pinned host wants BOTH that exact glibc
 // bottle AND, wherever the factory published one, the tool built against it —
 // the `<version>-glibc<ver>` tag.
 func GlibcFlavor() string {
-	return strings.TrimPrefix(strings.TrimSpace(Env("PKGX_GLIBC")), "=")
+	return strings.TrimPrefix(strings.TrimSpace(Env("ZPKG_GLIBC")), "=")
 }
 
 func resolveGlibcConstraint() string {

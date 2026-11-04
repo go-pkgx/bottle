@@ -449,9 +449,9 @@ func SetupScratchRootfsAt(root, loaderName, loaderTarget, shellTarget string) er
 // OWN artefacts, twice over and independently:
 //
 //   - 362 occurrences of `ld64.so.1 is NEEDED` across the s390x lane's logs,
-//     and not one `ld-linux-*.so` (recorded in go-pkgx/packages'
+//     and not one `ld-linux-*.so` (recorded in go-zpkg/packages'
 //     overrides/gnu.org-glibc.hcl, which needed the same fact for $LDSO);
-//   - `readelf -l` on the published s390x libc.so.6 (go-pkgx/bk#263):
+//   - `readelf -l` on the published s390x libc.so.6 (go-zpkg/bk#263):
 //     `/…/gnu.org/glibc/v2.44+brewing/lib/glibc-2.44/ld64.so.1`.
 //
 // ppc64le, riscv64 and loong64 are deliberately ABSENT. bk is TESTED on them

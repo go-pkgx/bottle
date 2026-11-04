@@ -3,7 +3,7 @@ package bottle
 import "testing"
 
 func TestVersionsForAndDownloadBottle(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0") // transport test: HTTP dist carries no signatures
+	t.Setenv("ZPKG_VERIFY", "0") // transport test: HTTP dist carries no signatures
 	osn, arch := HostSlug()
 	defer fakeServer(t, map[string]fakePkg{
 		"acme.org/tool": {
@@ -47,9 +47,9 @@ func TestApplyEnvOverride(t *testing.T) {
 	defer func() { DistBase, PantryBase = d, p }()
 	applyEnv(func(k string) string {
 		switch k {
-		case "PKGX_DIST":
+		case "ZPKG_DIST":
 			return "https://mirror.example/"
-		case "PKGX_PANTRY":
+		case "ZPKG_PANTRY":
 			return "https://pantry.example/projects/"
 		}
 		return ""

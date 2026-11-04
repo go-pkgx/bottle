@@ -1,34 +1,34 @@
 # bottle
 
-[![pkg.go.dev](https://img.shields.io/badge/pkg.go.dev-bottle-007d9c?logo=go&logoColor=white)](https://pkg.go.dev/github.com/go-pkgx/bottle)
+[![pkg.go.dev](https://img.shields.io/badge/pkg.go.dev-bottle-007d9c?logo=go&logoColor=white)](https://pkg.go.dev/github.com/go-zpkg/bottle)
 ![Go](https://img.shields.io/badge/Go-1.27%2B-00ADD8?logo=go&logoColor=white)
 ![License](https://img.shields.io/badge/license-BSD--3--Clause-blue)
 
 The pure-Go **pkgx bottle client** — the shared backend of the pure-Go pkgx
 family. It resolves a package's dependency closure from the pkgx pantry,
-downloads the bottles from the configured `PKGX_DIST` (default: the signed
-`oci://ghcr.io/go-pkgx/packages` registry; set `https://dist.pkgx.dev` for the
+downloads the bottles from the configured `ZPKG_DIST` (default: the signed
+`oci://ghcr.io/go-zpkg/packages` registry; set `https://dist.pkgx.dev` for the
 full unsigned upstream pantry), completes the implicit libc/gcc closure a
 `FROM scratch` image needs, and execs through the pkgx glibc loader.
 `CGO_ENABLED=0`, no runtime dependencies of its own.
 
 Consumed by:
 
-- [go-pkgx/pkgm](https://github.com/go-pkgx/pkgm) — the *installer*
-- [go-pkgx/pkgx](https://github.com/go-pkgx/pkgx) — the *runtime*
+- [go-zpkg/pkgm](https://github.com/go-zpkg/zpkgm) — the *installer*
+- [go-zpkg/pkgx](https://github.com/go-zpkg/zpkgx) — the *runtime*
 
 so both tools share one source of truth for the bottle protocol.
 
 ## Highlights
 
 - Reads `package.yml` + `versions.txt` from the pantry, BFS the runtime
-  dependency closure, streams gzip/xz + tar into `PKGX_DIR`.
+  dependency closure, streams gzip/xz + tar into `ZPKG_DIR`.
 - **Soname-exact FROM-scratch completion**: walks each bottle's ELF
   `DT_NEEDED` and pulls the provider version that ships the exact soname an
   ABI needs (not merely the latest), so drifted sonames resolve.
 - Embedded Mozilla CA bundle (`net/http` with no system trust store), pure-Go
   DNS.
-- **Nothing outside the store.** A blob is staged inside `$PKGX_DIR`, not in
+- **Nothing outside the store.** A blob is staged inside `$ZPKG_DIR`, not in
   the system temp directory: `FROM scratch` has no `/tmp`, and until this was
   measured by building that image and running it, `pkgx catalog update` failed
   on the one image this package exists to serve.
@@ -84,7 +84,7 @@ fixtures (encode side).
 
 ## What gets verified
 
-With `PKGX_VERIFY` on — the default — **every** pull that brings bytes onto
+With `ZPKG_VERIFY` on — the default — **every** pull that brings bytes onto
 the machine checks the bottle's cosign signature against the pinned key and
 fails closed. Not "every install": every pull.
 
@@ -119,7 +119,7 @@ Go sends a request path **verbatim** — it does not clean `..` — and
 normalised one, which Go's client follows. Measured, not reasoned about:
 
 ```
-httpGet(".../pkgxdev/pantry/main/projects/../../../../go-pkgx/pantry-overlay/main/README.md")
+httpGet(".../pkgxdev/pantry/main/projects/../../../../go-zpkg/pantry-overlay/main/README.md")
 → 1270 bytes of ANOTHER repository's file
 ```
 
@@ -201,7 +201,7 @@ listing order decide. It too was built from the numeric components alone, so
 `3.3.11` and `3.3.11_1` shared the key `3.3.11`, and `selectVersions` kept one
 and **dropped the other from the listing entirely**.
 
-Measured against `ghcr.io/go-pkgx/packages/fftw.org`, which publishes both
+Measured against `ghcr.io/go-zpkg/packages/fftw.org`, which publishes both
 tags:
 
 ```
@@ -257,7 +257,7 @@ bk appends `_N` to a version it already resolved.
 
 ## An end-of-life line is ranked last, never removed
 
-`PKGX_DEPRECATED` may name a JSON file of end-of-life release lines per
+`ZPKG_DEPRECATED` may name a JSON file of end-of-life release lines per
 project, e.g. `{"openssl.org": ["3.6", "3.4"]}`. Among the versions that
 satisfy a constraint, one on a listed line is chosen only when nothing else
 satisfies, and the fall back is announced on stderr
@@ -276,7 +276,7 @@ the only source, this feature changed no answer for anybody, and openssl's
 The precedence is deliberate, and the surprising direction is the one to
 avoid:
 
-| `PKGX_DEPRECATED` | list used |
+| `ZPKG_DEPRECATED` | list used |
 | --- | --- |
 | set, readable | that file, and **only** that file — never a union with the default |
 | set, missing or unparsable | **empty, with a warning** — explicitly *not* the default |

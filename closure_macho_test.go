@@ -373,7 +373,7 @@ func TestProvideMachoSonameWhenTheLookupFails(t *testing.T) {
 // while this skipped them, so the auditor and the resolver disagreed
 // about 42% of a platform's backlog with not one line in the log.
 //
-// The warning does not resolve them (go-pkgx/bottle#166). It stops the
+// The warning does not resolve them (go-zpkg/bottle#166). It stops the
 // gap being invisible.
 func TestABareReferenceIsNamedRatherThanSkippedInSilence(t *testing.T) {
 	oldW := Warn

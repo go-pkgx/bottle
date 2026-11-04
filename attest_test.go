@@ -16,7 +16,7 @@ import (
 func TestFetchAttestations(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	withDist(t, fr.base("go-pkgx/bottles"))
+	withDist(t, fr.base("go-zpkg/bottles"))
 	c, err := NewOCIClient(DistBase)
 	if err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func TestFetchAttestations(t *testing.T) {
 func TestFetchAttestationsErrors(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	withDist(t, fr.base("go-pkgx/bottles"))
+	withDist(t, fr.base("go-zpkg/bottles"))
 	c, err := NewOCIClient(DistBase)
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +142,7 @@ func TestFetchAttestationsRegistryFaults(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fr := newFakeRegistry(t, false)
 			defer fr.close()
-			withDist(t, fr.base("go-pkgx/bottles"))
+			withDist(t, fr.base("go-zpkg/bottles"))
 			c, err := NewOCIClient(DistBase)
 			if err != nil {
 				t.Fatal(err)

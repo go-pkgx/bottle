@@ -20,7 +20,7 @@ import (
 //	      open /tmp/bottle-blob-1245446855: no such file or directory
 func TestABlobIsStagedInsideTheStore(t *testing.T) {
 	store := t.TempDir()
-	t.Setenv("PKGX_DIR", store)
+	t.Setenv("ZPKG_DIR", store)
 
 	got := blobStagingDir()
 	want := filepath.Join(store, ".local", "tmp")
@@ -43,11 +43,11 @@ func TestABlobIsStagedInsideTheStore(t *testing.T) {
 
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/packages"))
+	c, err := NewOCIClient(fr.base("go-zpkg/packages"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	if err := c.Push("zlib.net", "1.3.2", "linux", "x86-64", makeGzTarball("body"), ExtTarGz); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestABlobIsStagedInsideTheStore(t *testing.T) {
 	}
 }
 
-// A read-only $PKGX_DIR is somebody's deliberate arrangement. Refusing to
+// A read-only $ZPKG_DIR is somebody's deliberate arrangement. Refusing to
 // fetch at all would be a worse answer than the behaviour every release
 // until now had, so it falls back to the system temp directory.
 func TestStagingFallsBackWhenTheStoreCannotBeMade(t *testing.T) {
