@@ -275,7 +275,7 @@ func matchesAny(needed map[string]bool, prefixes []string) bool {
 func prefixesOf(closure []Resolved, dir string) []string {
 	var out []string
 	for _, r := range closure {
-		out = append(out, filepath.Join(dir, r.Project, "v"+r.Version.Raw))
+		out = append(out, StorePrefix(dir, r.Project, r.Version))
 	}
 	return out
 }
@@ -529,7 +529,7 @@ func installProvidingSoname(project, soname, dir, osn, arch string) (Resolved, b
 		if _, err := InstallFor(r, dir, osn, arch); err != nil {
 			continue // no bottle for this version/platform — try the next one
 		}
-		prefix := filepath.Join(dir, r.Project, "v"+r.Version.Raw)
+		prefix := StorePrefix(dir, r.Project, r.Version)
 		if availableSonames([]string{prefix})[soname] {
 			return r, true, nil
 		}

@@ -2074,7 +2074,7 @@ func InstallFor(r Resolved, pkgxDir, osn, arch string) (bool, error) {
 	// whose binaries the kernel refuses. Written here because this is where
 	// the platform being installed is known for certain.
 	MarkStorePlatform(pkgxDir, osn, arch)
-	prefix := filepath.Join(pkgxDir, r.Project, "v"+r.Version.Raw)
+	prefix := StorePrefix(pkgxDir, r.Project, r.Version)
 	if st, err := os.Stat(prefix); err == nil && st.IsDir() {
 		return false, nil // already present
 	}
@@ -2171,6 +2171,14 @@ func renameOrExplain(src, dest, prefix, project, version string) (bool, error) {
 // the canonical name keeps the ordinary case exact; falling back to the single
 // `v*` directory present handles a bottle published under another spelling of
 // the same version. Two candidates is not a case to guess at.
+//
+// ⛔ THIS IS THE ARCHIVE'S LAYOUT, NOT THE STORE'S — DO NOT "FIX" IT TO USE
+// StorePrefix. A bottle's tarball contains `<project>/v<version>/`, with no
+// variant hash in it: the factory names what it built, and a tarball is the
+// same bytes wherever it is unpacked. The hash belongs to where the bottle
+// GOES, which is why the caller extracts to this path and then renames it
+// onto StorePrefix. That rename is the whole mechanism by which two builds of
+// one version can sit side by side without the factory changing at all.
 func extractedPrefix(tmp string, r Resolved) (path string, aliased bool) {
 	canonical := filepath.Join(tmp, r.Project, "v"+r.Version.Raw)
 	if st, err := os.Stat(canonical); err == nil && st.IsDir() {

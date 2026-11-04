@@ -122,13 +122,13 @@ func IsELF(p string) bool {
 	return magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F'
 }
 
-// PrefixOf returns the installed prefix directory <dir>/<project>/v<version>
-// for the Resolved whose Project equals project in the closure, or "" if the
-// project is not part of the closure.
+// PrefixOf returns the installed prefix directory for the Resolved whose
+// Project equals project in the closure, or "" if the project is not part of
+// the closure. StorePrefix decides the layout; see storepath.go.
 func PrefixOf(project string, closure []Resolved, dir string) string {
 	for _, r := range closure {
 		if r.Project == project {
-			return filepath.Join(dir, project, "v"+r.Version.Raw)
+			return StorePrefix(dir, project, r.Version)
 		}
 	}
 	return ""
@@ -139,48 +139,69 @@ func PrefixOf(project string, closure []Resolved, dir string) string {
 //
 // The other direction from PrefixOf: that one COMPOSES a path from a
 // version somebody already resolved, this one ENUMERATES what is on disk.
-// Nothing asked the second question until a browser wanted to mark what you
-// already have, and the convention — <dir>/<project>/v<version> — was
-// spelled out at nine call sites with no reader anywhere.
+// Both now go through storepath.go, which is where the layout lives.
 //
 // Newest first by VERSION order, not by name: a directory listing is
 // alphabetical, and alphabetically "v1.9" sorts above "v1.10", so the first
 // entry would be the wrong one to put beside a project's name.
 //
-// The `v1` / `v1.2` / `v*` ALIASES writeVersionLinks leaves beside the real
-// directories are symlinks, and os.ReadDir lstats, so their IsDir is false
-// and the directory filter drops them. That is load-bearing rather than
-// incidental: counted as versions they would make one install look like
-// three, and `pkgx ls` would say a project has versions nobody can name.
-//
 // An unreadable or absent directory is no versions, not an error. "Nothing
 // installed" is the normal state of almost every project in a catalogue of
 // two thousand, and a browser cannot stop to report it.
 func InstalledVersions(project, dir string) []string {
+	seen := map[string]bool{}
+	// nil and not an empty slice for "nothing installed": the callers compare
+	// against nil, and TestInstalledVersions asserts it.
+	var out []string
+	for _, v := range InstalledBuilds(project, dir) {
+		// ⛔ TWO BUILDS OF ONE VERSION ARE ONE VERSION. Since the store
+		// gained a variant hash, `v3.3.11` and `v3.3.11-h…` can both be on
+		// disk, and a caller asking which VERSIONS are installed must not be
+		// told "3.3.11" twice. InstalledBuilds is the question that
+		// distinguishes them.
+		if seen[v.Raw] {
+			continue
+		}
+		seen[v.Raw] = true
+		out = append(out, v.Raw)
+	}
+	return out
+}
+
+// InstalledBuilds lists the BUILDS of a project present in a store, newest
+// first, each carrying the variant hash its directory names (empty when the
+// directory does not record one).
+//
+// InstalledVersions answers "which releases do I have"; this answers "which
+// bottles do I have", and the two stopped being the same question the moment
+// a path could hold more than one build of a version.
+//
+// Builds of ONE version keep the order their directories were read in, which
+// is alphabetical by hash: they are siblings, not a sequence, and cmpVer
+// ignores the hash for exactly that reason (see Ver.Variant). Any other
+// order here would invent a preference between them.
+func InstalledBuilds(project, dir string) []Ver {
 	ents, err := os.ReadDir(filepath.Join(dir, project))
 	if err != nil {
 		return nil
 	}
 	var vs []Ver
 	for _, e := range ents {
-		if !e.IsDir() || !strings.HasPrefix(e.Name(), "v") {
+		// The `v1` / `v1.2` / `v*` aliases writeVersionLinks leaves beside
+		// the real directories are symlinks, and os.ReadDir lstats, so their
+		// IsDir is false and this drops them. Counted as versions they would
+		// make one install look like three.
+		if !e.IsDir() {
 			continue
 		}
-		raw := strings.TrimPrefix(e.Name(), "v")
-		// A digit after the v is what tells a version directory from a
-		// word. It also drops the `v*` alias, whose second character is
-		// not one.
-		if raw == "" || raw[0] < '0' || raw[0] > '9' {
+		v, ok := ParseStoreDirName(e.Name())
+		if !ok {
 			continue
 		}
-		vs = append(vs, ParseVer(raw))
+		vs = append(vs, v)
 	}
-	sort.Slice(vs, func(i, j int) bool { return cmpVer(vs[i], vs[j]) > 0 })
-	out := make([]string, 0, len(vs))
-	for _, v := range vs {
-		out = append(out, v.Raw)
-	}
-	return out
+	sort.SliceStable(vs, func(i, j int) bool { return cmpVer(vs[i], vs[j]) > 0 })
+	return vs
 }
 
 // Stage describes where a closure's bottles LIVE while stubs are written and
@@ -237,8 +258,8 @@ func StubBinsStaged(closure []Resolved, s Stage) (int, error) {
 	}
 	n := 0
 	for _, r := range closure {
-		pkgPrefix := filepath.Join(dir, r.Project, "v"+r.Version.Raw)
-		guestPrefix := filepath.Join(guestDir, r.Project, "v"+r.Version.Raw)
+		pkgPrefix := StorePrefix(dir, r.Project, r.Version)
+		guestPrefix := StorePrefix(guestDir, r.Project, r.Version)
 		_, provides, err := FetchMetaFor(r.Project, osn, arch)
 		if err != nil {
 			continue
@@ -268,7 +289,7 @@ func StubBinsStaged(closure []Resolved, s Stage) (int, error) {
 func LibDirs(closure []Resolved, dir string) []string {
 	var paths []string
 	for _, r := range closure {
-		prefix := filepath.Join(dir, r.Project, "v"+r.Version.Raw)
+		prefix := StorePrefix(dir, r.Project, r.Version)
 		for _, sub := range []string{"lib", "lib64"} {
 			p := filepath.Join(prefix, sub)
 			if st, err := os.Stat(p); err == nil && st.IsDir() {
@@ -354,7 +375,7 @@ func MergeClosures(a, b []Resolved) []Resolved {
 func FindClosureBin(closure []Resolved, dir, project, name string) string {
 	for _, r := range closure {
 		if r.Project == project {
-			p := filepath.Join(dir, project, "v"+r.Version.Raw, "bin", name)
+			p := filepath.Join(StorePrefix(dir, project, r.Version), "bin", name)
 			if _, err := os.Stat(p); err == nil {
 				return p
 			}
