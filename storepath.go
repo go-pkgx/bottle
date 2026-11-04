@@ -141,6 +141,16 @@ func hashOf(s string) string {
 	return strings.ToLower(lowerBase32.EncodeToString(sum[:]))[:hashLen]
 }
 
+// ShortHash renders any identity string in the one shape a store path and an
+// OCI tag both use.
+//
+// ⛔ IT LIVES HERE BECAUSE BOTH WRITERS DO. The factory computes a build's
+// identity (go-zpkg/zbk's spec package) and has to put it in a tag; the
+// installer has to find the matching directory. If each shortened in its own
+// way the two would silently address different things, and the symptom would
+// be "the bottle is not published" for a bottle that is.
+func ShortHash(identity string) string { return hashOf(identity) }
+
 // linkStoreAlias makes `<store>/<project>/v<version>` resolve to one build.
 //
 // ⛔⛔ THIS LINK IS PART OF THE PUBLISHED ABI, WHICH IS WHY IT LIVES IN THE
