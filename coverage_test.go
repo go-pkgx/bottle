@@ -689,13 +689,15 @@ func TestResolveClosureBranches(t *testing.T) {
 	}
 }
 
-// ⛔⛔ VERSION "1.2" IS THE SELF-SYMLINK CASE, AND THE HASH IS WHAT ENDS IT.
+// ⛔⛔ VERSION "1.2" WAS THE SELF-SYMLINK CASE, AND IT IS NOW SIMPLY ABSENT.
 // The `v{maj}.{min}` alias for 1.2 IS `v1.2`, which used to be the real
-// directory — so writeVersionLinks had to SKIP it or write `v1.2 -> v1.2`.
-// Now the real directory is `v1.2-h<hash>` and every alias, `v1.2` included,
-// is an ordinary link to it. Nothing has to be skipped, and the case that
-// needed skipping cannot occur.
-func TestWriteVersionLinksAliasEqualsFull(t *testing.T) {
+// directory — so writeVersionLinks had to SKIP it or write `v1.2 -> v1.2`, a
+// self-symlink that left the version unresolvable.
+//
+// There are no aliases. The install produces exactly one entry, it carries
+// the hash, and the whole family of "which alias should move where" problems
+// goes with them.
+func TestATwoComponentVersionProducesOneHashedEntry(t *testing.T) {
 	defer fakeServer(t, map[string]fakePkg{
 		"al.org/tool": {versions: []string{"1.2"}, yaml: "provides:\n  - bin/tool\n", files: map[string]string{"bin/tool": "x"}},
 	})()
@@ -703,24 +705,20 @@ func TestWriteVersionLinksAliasEqualsFull(t *testing.T) {
 	if _, err := Install(Resolved{"al.org/tool", ParseVer("1.2")}, dir); err != nil {
 		t.Fatal(err)
 	}
-	// `v1.2` is a LINK now, and it must resolve — every dependent binary's
-	// rpath names it.
-	full := filepath.Join(dir, "al.org/tool", "v1.2")
-	st, err := os.Lstat(full)
-	if err != nil || st.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("v1.2 should be a symlink to the hashed build (err=%v)", err)
+	ents, err := os.ReadDir(filepath.Join(dir, "al.org/tool"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(full, "bin", "tool")); err != nil {
-		t.Errorf("v1.2 does not resolve to the payload: %v", err)
+	if len(ents) != 1 {
+		t.Fatalf("%d entries, want one hashed build: %v", len(ents), entryNames(ents))
 	}
-	// It must not point at itself, which is what the old skip existed for.
-	tgt, err := os.Readlink(full)
-	if err != nil || tgt == "v1.2" {
-		t.Errorf("v1.2 -> %q (err=%v): a self-symlink leaves the version unresolvable", tgt, err)
+	if !strings.HasPrefix(ents[0].Name(), "v1.2"+variantSep) {
+		t.Errorf("entry %q is not the hashed build of 1.2", ents[0].Name())
 	}
-	// the v1 alias is still a symlink.
-	if st, err := os.Lstat(filepath.Join(dir, "al.org/tool", "v1")); err != nil || st.Mode()&os.ModeSymlink == 0 {
-		t.Errorf("v1 alias missing/not a symlink (err=%v)", err)
+	// And it resolves to the payload through the one path that exists.
+	p := StorePrefix(dir, "al.org/tool", ParseVer("1.2"))
+	if _, err := os.Stat(filepath.Join(p, "bin", "tool")); err != nil {
+		t.Errorf("the build does not hold the payload: %v", err)
 	}
 }
 
@@ -768,13 +766,15 @@ func TestInstallOverOCIGzAndXz(t *testing.T) {
 	if fresh, err := Install(Resolved{"gz.pkg", ParseVer("1.0.0")}, dir); err != nil || !fresh {
 		t.Fatalf("gz install fresh=%v err=%v", fresh, err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "gz.pkg", "v1.0.0", "bin", "g")); err != nil {
+	// Through StorePrefix: the store holds `v1.0.0-h<hash>` and nothing else,
+	// so a path composed from the version alone names nothing.
+	if _, err := os.Stat(filepath.Join(StorePrefix(dir, "gz.pkg", ParseVer("1.0.0")), "bin", "g")); err != nil {
 		t.Errorf("gz bottle not extracted: %v", err)
 	}
 	if fresh, err := Install(Resolved{"xz.pkg", ParseVer("1.0.0")}, dir); err != nil || !fresh {
 		t.Fatalf("xz install fresh=%v err=%v", fresh, err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "xz.pkg", "v1.0.0", "bin", "x")); err != nil {
+	if _, err := os.Stat(filepath.Join(StorePrefix(dir, "xz.pkg", ParseVer("1.0.0")), "bin", "x")); err != nil {
 		t.Errorf("xz bottle not extracted: %v", err)
 	}
 }

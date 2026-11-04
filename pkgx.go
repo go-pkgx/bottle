@@ -2147,31 +2147,26 @@ func InstallFor(r Resolved, pkgxDir, osn, arch string) (bool, error) {
 	if moved, err := renameOrExplain(src, pkgxDir, r.Project, r.Version, hash); err != nil || !moved {
 		return false, err
 	}
-	// ⛔⛔ `v<version>` STAYS, AS A SYMLINK, AND IT IS NOT A CONVENIENCE —
-	// IT IS IN THE PUBLISHED BINARIES. Read out of a real published bottle,
-	// zlib.net 1.3.2 for darwin/aarch64:
+	// ⛔⛔ NO VERSION-ONLY PATH IS WRITTEN. NOT `v<version>`, NOT `v1`, NOT
+	// `v1.2`, NOT `v*`.
 	//
-	//	otool -l …/libz.1.3.2.dylib
-	//	  name @rpath/zlib.net/v1.3.2/lib/libz.1.dylib
+	// Those were pkgx's convenience aliases and this store inherited them.
+	// Every one of them is a path that names a VERSION and not a BUILD, and
+	// a store that offers such a path offers a way to address a package
+	// without saying which build you mean — which is the defect the hashed
+	// layout exists to end, reintroduced one directory up.
 	//
-	// Every binary that links zlib names that path. A store holding only
-	// `v1.3.2-h…` would break every one of them at load time, and the
-	// failure would be a dynamic-linker error far from here. So the real
-	// directory carries the hash and this link makes the published path
-	// resolve.
+	// It was kept for one real reason: published bottles name the version in
+	// their own rpaths (`@rpath/zlib.net/v1.3.2/lib/libz.1.dylib`, read with
+	// otool out of a real bottle). That reason expires with the rebuild —
+	// a bottle built with a hashed prefix carries the hash in its own
+	// references — and the bottles that need it are the ones we have decided
+	// not to install.
 	//
-	// ⛔ WHICH BUILD IT POINTS AT IS THE STORE'S DEFAULT, NOT A USER'S. On a
-	// shared NFS export that is a site-level fact, and a user who needs a
-	// different one does not rewrite it — they get a VIEW (LinkView), a tree
-	// of links of their own that their rpath finds first. A container or
-	// microVM built from an environment is the same mechanism: its links are
-	// COMPUTED INTO THE IMAGE at creation time from the shared store. An
-	// environment never consults the default at all, because it resolves to
-	// exact hashes when it is loaded.
-	if err := linkStoreAlias(pkgxDir, r.Project, r.Version, hash); err != nil {
-		return false, err
-	}
-	writeVersionLinks(pkgxDir, r, hash)
+	// A per-user or per-image default is NOT this: it is a VIEW, built
+	// outside the store by LinkView, which is what lets a shared NFS export
+	// stay read-only and lets a container compute its own links at creation
+	// time.
 	writeABILinks(pkgxDir, r, osn, arch)
 	return true, nil
 }
@@ -2394,70 +2389,30 @@ func untar(r io.Reader, dest string) error {
 	return Extract(tar.NewReader(r), dest, 0)
 }
 
-// writeVersionLinks creates v{maj}, v{maj}.{min} and v* -> v{full} symlinks
-// alongside the extracted prefix, matching pkgx's convenience aliases.
+// ⛔⛔ writeVersionLinks AND aliasAdvances ARE GONE, AND THE DEFECT THEY
+// FIXED CANNOT RECUR BECAUSE THE THING THEY MANAGED NO LONGER EXISTS.
 //
-// An alias only ever ADVANCES. It used to be rewritten unconditionally, so the
-// last install won rather than the newest version — and installing an OLDER
-// line of a project demoted v* and v<major> onto it:
+// They wrote `v{maj}`, `v{maj}.{min}` and `v*` beside each install, pkgx's
+// convenience aliases, and `aliasAdvances` existed because the first version
+// rewrote them unconditionally: installing an OLDER line of a project
+// demoted `v*` and `v<major>` onto it —
 //
 //	v*    -> v2.13.9   (after installing 2.13.9 beside 2.15.4)
 //	v2    -> v2.13.9
 //
-// Every consumer still bound to v2 then loads the older library, which is the
-// failure the ABI lines exist to end, arrived at from the other side. It was
-// always reachable — `pkgx +foo@1` after `+foo@2` did it — but a resolver that
-// installs two lines of one project on purpose makes it the ordinary case.
-// ⛔⛔ THEY POINT AT THE HASHED DIRECTORY, NOT AT `v{full}`. `v{full}` is
-// itself a symlink now, and a chain of links is the smaller problem: for
-// version "1.2" the `v{maj}.{min}` alias IS `v1.2`, so targeting `v{full}`
-// wrote `v1.2 -> v1.2` — a self-symlink that replaced the real alias and
-// left the version unresolvable. Pointing every alias at the one real
-// directory removes the whole class.
-func writeVersionLinks(pkgxDir string, r Resolved, hash string) {
-	dir := filepath.Join(pkgxDir, r.Project)
-	target := StoreBuildDirName(r.Version, hash)
-	n := r.Version.Nums
-	aliases := []string{"v*"}
-	if len(n) >= 1 {
-		aliases = append(aliases, "v"+strconv.Itoa(n[0]))
-	}
-	if len(n) >= 2 {
-		aliases = append(aliases, "v"+strconv.Itoa(n[0])+"."+strconv.Itoa(n[1]))
-	}
-	for _, a := range aliases {
-		if a == target {
-			continue
-		}
-		p := filepath.Join(dir, a)
-		if !aliasAdvances(dir, p, r.Version) {
-			continue
-		}
-		_ = os.Remove(p)
-		_ = os.Symlink(target, p)
-	}
-}
-
-// aliasAdvances reports whether an alias should be moved onto v.
+// — so every consumer bound to `v2` loaded the older library, which is the
+// failure the ABI lines exist to end, reached from the other side.
 //
-// It should when there is nothing there, when what is there cannot be read as
-// a version, when it points at a version directory that is NOT installed — a
-// dangling alias is worse than a stale one, since nothing resolves through it
-// — and when v is newer than the version it names.
-func aliasAdvances(dir, alias string, v Ver) bool {
-	target, err := os.Readlink(alias)
-	if err != nil {
-		return true // absent, or not a symlink we wrote
-	}
-	if !strings.HasPrefix(target, "v") {
-		return true
-	}
-	if _, err := os.Stat(filepath.Join(dir, target)); err != nil {
-		return true // dangling: the version it names is gone
-	}
-	return cmpVer(v, ParseVer(strings.TrimPrefix(target, "v"))) > 0
-}
-
+// That was a careful fix to a problem created by having the alias at all.
+// Every one of those paths names a VERSION and not a BUILD, so a store
+// offering them offers a way to address a package without saying which build
+// is meant — the defect the hashed layout exists to end, one directory up.
+// Now that the store holds only `v<version>-h<hash>`, there is nothing to
+// advance and nothing to demote.
+//
+// The rule they encoded survives where it is still needed: `writeABILinks`
+// resolves a soname to a build, and the catalogue answers "which versions
+// are installed" from InstalledBuilds.
 // ABIProvidesAnnotation lists the sonames a bottle's shared libraries call
 // themselves by, comma-separated and sorted. Written by bk at publish time.
 // Declared in annotations.go and read through Annotation().

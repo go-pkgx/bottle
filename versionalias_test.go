@@ -3,117 +3,126 @@ package bottle
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-// links reads back every alias in a project directory.
-func links(t *testing.T, dir string) map[string]string {
-	t.Helper()
-	ents, err := os.ReadDir(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := map[string]string{}
-	for _, e := range ents {
-		if e.Type()&os.ModeSymlink == 0 {
-			continue
-		}
-		tgt, err := os.Readlink(filepath.Join(dir, e.Name()))
-		if err != nil {
-			t.Fatal(err)
-		}
-		out[e.Name()] = tgt
-	}
-	return out
-}
-
-// installDir makes the REAL directory an install would make: hashed.
+// ⛔⛔ THIS FILE USED TO TEST THE VERSION ALIASES. IT NOW TESTS THAT THERE ARE
+// NONE, AND THE HISTORY IS THE REASON.
 //
-// ⛔ THE ALIASES NOW POINT AT IT, NOT AT `v<raw>`. `v<raw>` is itself a
-// symlink, and for a two-component version like "1.2" the `v{maj}.{min}`
-// alias IS `v1.2` — so targeting `v<raw>` wrote `v1.2 -> v1.2`, a
-// self-symlink that replaced the real alias and left the version
-// unresolvable. These tests assert the target, so they are what notices.
-func installDir(t *testing.T, pkgxDir, project, raw string) string {
+// `writeVersionLinks` wrote `v{maj}`, `v{maj}.{min}` and `v*` beside each
+// install — pkgx's convenience aliases — and `aliasAdvances` existed because
+// the first version rewrote them unconditionally. Installing an OLDER line of
+// a project then demoted the aliases onto it:
+//
+//	v*    -> v2.13.9   (after installing 2.13.9 beside 2.15.4)
+//	v2    -> v2.13.9
+//
+// and every consumer bound to `v2` loaded the older library — the failure the
+// ABI lines exist to end, reached from the other side. The fix was careful,
+// and it was a careful fix to a problem created by having the alias at all.
+//
+// Each of those paths names a VERSION and not a BUILD. A store that offers
+// one offers a way to address a package without saying which build is meant,
+// which is the defect the hashed layout exists to end, one directory up. So
+// they are gone, and the only thing left worth asserting is their absence.
+
+// installAt makes the real directory an install makes: hashed, with a payload.
+func installAt(t *testing.T, pkgxDir, project, raw string) string {
 	t.Helper()
-	hash := StoreHash(ParseVer(raw), "digest:"+project+"@"+raw, "")
-	if err := os.MkdirAll(filepath.Join(pkgxDir, project, StoreBuildDirName(ParseVer(raw), hash), "lib"), 0o755); err != nil {
+	v := ParseVer(raw)
+	hash := StoreHash(v, "digest:"+project+"@"+raw, "")
+	dir := StoreBuildPrefix(pkgxDir, project, v, hash)
+	if err := os.MkdirAll(filepath.Join(dir, "lib"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return hash
 }
 
-// dirOf is the hashed directory installDir made, for an expectation.
-func dirOf(project, raw string) string {
-	return StoreBuildDirName(ParseVer(raw), StoreHash(ParseVer(raw), "digest:"+project+"@"+raw, ""))
-}
-
-// Installing an OLDER line beside a newer one must not demote v* or v<major>
-// onto it. Every consumer still bound to v2 would load the older library —
-// the failure the ABI lines exist to end, reached from the other side.
-func TestVersionAliasDoesNotRegress(t *testing.T) {
+// ⛔ EVERY ENTRY IN A PROJECT'S DIRECTORY CARRIES A HASH. Not `v2.15.4`, not
+// `v2`, not `v2.15`, not `v*` — and not as a symlink either, because a
+// symlink is a path too and the point is that no path addresses a version.
+func TestAProjectDirectoryHoldsOnlyHashedBuilds(t *testing.T) {
 	pkgx := t.TempDir()
 	const proj = "gnome.org/libxml2"
-	writeVersionLinks(pkgx, Resolved{proj, ParseVer("2.15.4")}, installDir(t, pkgx, proj, "2.15.4"))
-	writeVersionLinks(pkgx, Resolved{proj, ParseVer("2.13.9")}, installDir(t, pkgx, proj, "2.13.9"))
+	installAt(t, pkgx, proj, "2.15.4")
+	installAt(t, pkgx, proj, "2.13.9")
 
-	got := links(t, filepath.Join(pkgx, proj))
-	for alias, want := range map[string]string{
-		"v*":    dirOf(proj, "2.15.4"), // the newest, not the last installed
-		"v2":    dirOf(proj, "2.15.4"),
-		"v2.15": dirOf(proj, "2.15.4"),
-		"v2.13": dirOf(proj, "2.13.9"), // its own minor line, which only 2.13.x can claim
-	} {
-		if got[alias] != want {
-			t.Errorf("%s -> %s, want %s (all: %v)", alias, got[alias], want, got)
+	ents, err := os.ReadDir(filepath.Join(pkgx, proj))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ents) != 2 {
+		t.Fatalf("%d entries, want exactly the two builds: %v", len(ents), entryNames(ents))
+	}
+	for _, e := range ents {
+		if !strings.Contains(e.Name(), variantSep) {
+			t.Errorf("%q names a version and not a build", e.Name())
+		}
+		if e.Type()&os.ModeSymlink != 0 {
+			t.Errorf("%q is a symlink — a link is a path too, and this one addresses a version", e.Name())
+		}
+		if _, ok := ParseStoreDirName(e.Name()); !ok {
+			t.Errorf("%q does not read back as a build directory", e.Name())
 		}
 	}
 }
 
-// The ordinary direction still works: a newer version takes the aliases.
-func TestVersionAliasAdvances(t *testing.T) {
+// ⛔⛔ THE DEFECT THE OLD ALIAS LOGIC EXISTED FOR CANNOT RECUR, and this is
+// the assertion that says why: installing an OLDER line after a newer one
+// changes nothing about the newer one. There is no alias to demote.
+func TestInstallingAnOlderLineCannotDemoteTheNewerOne(t *testing.T) {
 	pkgx := t.TempDir()
-	const proj = "a.org"
-	writeVersionLinks(pkgx, Resolved{proj, ParseVer("1.0.0")}, installDir(t, pkgx, proj, "1.0.0"))
-	writeVersionLinks(pkgx, Resolved{proj, ParseVer("2.0.0")}, installDir(t, pkgx, proj, "2.0.0"))
+	const proj = "gnome.org/libxml2"
+	newHash := installAt(t, pkgx, proj, "2.15.4")
+	newer := StoreBuildPrefix(pkgx, proj, ParseVer("2.15.4"), newHash)
 
-	got := links(t, filepath.Join(pkgx, proj))
-	if got["v*"] != dirOf(proj, "2.0.0") || got["v1"] != dirOf(proj, "1.0.0") || got["v2"] != dirOf(proj, "2.0.0") {
-		t.Errorf("aliases = %v", got)
+	before, err := os.Stat(newer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	installAt(t, pkgx, proj, "2.13.9")
+	after, err := os.Stat(newer)
+	if err != nil {
+		t.Fatalf("the newer build went away when an older one was installed: %v", err)
+	}
+	if !os.SameFile(before, after) {
+		t.Error("the newer build was replaced by installing an older line")
+	}
+
+	// And both are still addressable, each by its own hash.
+	if got := InstalledBuilds(proj, pkgx); len(got) != 2 {
+		t.Errorf("InstalledBuilds = %v, want both lines", got)
 	}
 }
 
-// A DANGLING alias is worse than a stale one: nothing resolves through it. So
-// an alias naming a version that is no longer installed is taken over, even by
-// an older one.
-func TestVersionAliasTakesOverADanglingLink(t *testing.T) {
-	pkgx := t.TempDir()
+// A VIEW is where a default lives, and it is outside the store — which is
+// what lets a shared NFS export stay read-only and lets a container compute
+// its own links at creation time.
+func TestADefaultIsAViewAndNotAStoreEntry(t *testing.T) {
+	store := t.TempDir()
+	view := t.TempDir()
 	const proj = "a.org"
-	dir := filepath.Join(pkgx, proj)
-	hash := installDir(t, pkgx, proj, "1.0.0")
-	if err := os.Symlink("v9.9.9", filepath.Join(dir, "v*")); err != nil {
+	hash := installAt(t, store, proj, "1.0.0")
+
+	if err := LinkView(view, store, proj, ParseVer("1.0.0"), hash); err != nil {
 		t.Fatal(err)
 	}
-	writeVersionLinks(pkgx, Resolved{proj, ParseVer("1.0.0")}, hash)
-
-	if got := links(t, dir); got["v*"] != dirOf(proj, "1.0.0") {
-		t.Errorf("v* -> %s, want the installed version (all: %v)", got["v*"], got)
+	// The view has the version-named path…
+	if _, err := os.Lstat(filepath.Join(view, proj, "v1.0.0")); err != nil {
+		t.Errorf("the view has no v1.0.0: %v", err)
+	}
+	// …and the store still does not.
+	if _, err := os.Lstat(filepath.Join(store, proj, "v1.0.0")); err == nil {
+		t.Error("LinkView wrote into the STORE: a default is not a property of the store")
 	}
 }
 
-// Something that is not one of our version links is replaced rather than
-// reasoned about: it is not an alias this function wrote.
-func TestVersionAliasReplacesSomethingUnreadable(t *testing.T) {
-	pkgx := t.TempDir()
-	const proj = "a.org"
-	dir := filepath.Join(pkgx, proj)
-	hash := installDir(t, pkgx, proj, "1.0.0")
-	if err := os.Symlink("somewhere-else", filepath.Join(dir, "v*")); err != nil {
-		t.Fatal(err)
+// entryNames, not `names`: the package already has a `names` for DepNodes.
+func entryNames(ents []os.DirEntry) []string {
+	out := make([]string, 0, len(ents))
+	for _, e := range ents {
+		out = append(out, e.Name())
 	}
-	writeVersionLinks(pkgx, Resolved{proj, ParseVer("1.0.0")}, hash)
-
-	if got := links(t, dir); got["v*"] != dirOf(proj, "1.0.0") {
-		t.Errorf("v* -> %s (all: %v)", got["v*"], got)
-	}
+	return out
 }

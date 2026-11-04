@@ -167,22 +167,6 @@ func ShortHash(identity string) string { return hashOf(identity) }
 // a release that did not hash paths, and replacing an installed tree with a
 // symlink is not something to do silently — the install is refused instead,
 // naming the path.
-func linkStoreAlias(dir, project string, v Ver, hash string) error {
-	alias := filepath.Join(dir, project, "v"+v.Raw)
-	target := StoreBuildDirName(v, hash)
-	if target == "v"+v.Raw {
-		return nil // the caller asked for the hashed path by name
-	}
-	if st, err := os.Lstat(alias); err == nil && st.Mode()&os.ModeSymlink == 0 {
-		if st.IsDir() {
-			return fmt.Errorf("bottle: %s is a directory, not an alias — "+
-				"it was installed by a release that did not hash store paths; remove or move it first", alias)
-		}
-	}
-	_ = os.Remove(alias)
-	return os.Symlink(target, alias)
-}
-
 // LinkView materialises the `v<version>` alias for ONE build inside a VIEW —
 // a user's profile, an environment, or a container rootfs being assembled.
 //
