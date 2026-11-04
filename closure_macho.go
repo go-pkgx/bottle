@@ -343,7 +343,7 @@ func provideMachoSoname(w want, dir string) (Resolved, bool) {
 	for i, n := len(vs)-1, 0; i >= 0 && n < maxTry; i, n = i-1, n+1 {
 		v := vs[i]
 		r := Resolved{w.project, v}
-		if !strings.Contains(","+abiAnnotations(w.project, v.tag(), osn, arch)[ABIProvidesAnnotation]+",", ","+w.soname+",") {
+		if !strings.Contains(","+Annotation(abiAnnotations(w.project, v.tag(), osn, arch), ABIProvidesAnnotation)+",", ","+w.soname+",") {
 			continue
 		}
 		if _, err := machoInstall(r, dir, osn, arch); err != nil {

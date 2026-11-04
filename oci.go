@@ -42,17 +42,47 @@ import (
 	"oras.land/oras-go/v2/registry/remote/auth"
 )
 
-// OCI / pkgx media types.
+// OCI media types.
+//
+// ⛔⛔ `vnd.pkgx.*` WAS A VENDOR NAMESPACE WE DO NOT OWN, FOR A FORMAT ITS
+// OWNER DOES NOT DEFINE. Checked against upstream's own corpus
+// (docs.pkgx.sh/llms-full.txt, read 2026-11-04) rather than assumed: pkgx
+// distributes **plain HTTPS tarballs** from `dist.pkgx.dev/<pkg>/<os>/<arch>/`
+// with `.sha256sum` and `.asc` beside them. It mentions no OCI registry, no
+// artifact type and no media type at all. The OCI packaging is entirely ours
+// — `bk` invented it — and we minted its names inside somebody else's vendor
+// space.
+//
+// That is the same mistake as `go-pkgx.dev/catalog`: a name that looks like
+// ours because we are the only ones using it, in a namespace whose owner
+// never agreed. Once we stop promising compatibility with legacy pkgx, there
+// is not even an argument of convenience left.
+//
+// ⛔ WRITE THE NEW ONE, READ BOTH. 42 756 bottles are published carrying the
+// old types and nothing rewrites a published manifest; a reader that accepted
+// only the new type would make every one of them unreadable the day it
+// shipped. A rename that breaks every install is not a rename.
+//
+// ⛔ AND THE COMPATIBILITY IS STRUCTURAL, WHICH IS WHY THERE ARE NO
+// `legacy…` CONSTANTS HERE. `extForLayer` matches the codec SUFFIX
+// (`tar+zstd`), never the whole string, so it reads both vendor spellings
+// without being told about either; nothing in the read path compares against
+// ArtifactTypeBottle at all. Declaring unused legacy constants would have
+// looked like a compatibility mechanism while being dead code.
+//
+// What pins it is a test holding the old strings as LITERALS
+// (mediacompat_test.go). A literal cannot be changed in sympathy with the new
+// constant during a tidy-up; a constant can.
 const (
-	MediaBottleLayerGz = "application/vnd.pkgx.bottle.layer.v1.tar+gzip"
-	MediaBottleLayerXz = "application/vnd.pkgx.bottle.layer.v1.tar+xz"
+	MediaBottleLayerGz = "application/vnd.go-zpkg.bottle.layer.v1.tar+gzip"
+	MediaBottleLayerXz = "application/vnd.go-zpkg.bottle.layer.v1.tar+xz"
 	// +zstd is a media type the OCI image-spec itself defines (unlike, say,
 	// brotli, which has none and would make every generic tool — skopeo, oras,
 	// registry UIs — treat the layer as opaque).
-	MediaBottleLayerZst = "application/vnd.pkgx.bottle.layer.v1.tar+zstd"
-	// ArtifactTypeBottle marks a pkgx-bottle image manifest (its manifest.config
+	MediaBottleLayerZst = "application/vnd.go-zpkg.bottle.layer.v1.tar+zstd"
+	// ArtifactTypeBottle marks a bottle image manifest (its manifest.config
 	// carries this via ORAS PackManifest v1.1's artifactType).
-	ArtifactTypeBottle = "application/vnd.pkgx.bottle"
+	ArtifactTypeBottle = "application/vnd.go-zpkg.bottle"
 	// dockerManifestList is Docker's media type for a multi-platform index, which
 	// some registries (Docker Hub) return instead of the OCI image index.
 	dockerManifestList = "application/vnd.docker.distribution.manifest.list.v2+json"
