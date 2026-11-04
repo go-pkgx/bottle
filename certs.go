@@ -25,7 +25,7 @@ var HTTPClient = NewHTTPClient()
 // exercisable on a host that does have one.
 var systemCertPool = x509.SystemCertPool
 
-// CertPool is the trust store the go-pkgx tools use: the host's, plus the
+// CertPool is the trust store the go-zpkg tools use: the host's, plus the
 // embedded Mozilla bundle. On a FROM-scratch image there is no system store at
 // all, so the embedded bundle is the only thing standing between a tool and
 // "x509: certificate signed by unknown authority" — which is exactly what bk hit

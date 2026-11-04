@@ -383,13 +383,13 @@ func TestImplicitRootsEnv(t *testing.T) {
 	} {
 		ImplicitRootsOff = false
 		applyEnv(func(k string) string {
-			if k == "PKGX_IMPLICIT_ROOTS" {
+			if k == "ZPKG_IMPLICIT_ROOTS" {
 				return c.val
 			}
 			return ""
 		})
 		if ImplicitRootsOff != c.want {
-			t.Errorf("PKGX_IMPLICIT_ROOTS=%q → off=%v, want %v", c.val, ImplicitRootsOff, c.want)
+			t.Errorf("ZPKG_IMPLICIT_ROOTS=%q → off=%v, want %v", c.val, ImplicitRootsOff, c.want)
 		}
 	}
 }

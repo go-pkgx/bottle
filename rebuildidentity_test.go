@@ -23,7 +23,7 @@ func raws(vs []Ver) []string {
 // TestARebuildSupersedesTheVersionItRebuilds pins that — not a licence to
 // delete the loser from the candidate list.
 //
-// Measured on ghcr.io/go-pkgx/packages/fftw.org, which publishes both tags:
+// Measured on ghcr.io/go-zpkg/packages/fftw.org, which publishes both tags:
 // VersionsFor returned 3.3.11_1 alone, so `=3.3.11` resolved to NOTHING while
 // the bottle sat in the registry, pullable. Rebuilding a bottle silently broke
 // every lock that pinned the version it rebuilt.

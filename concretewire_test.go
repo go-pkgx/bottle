@@ -193,7 +193,7 @@ func TestAnAnnotationCannotForgeAnotherSpecsHash(t *testing.T) {
 func TestSpecOfReadsAndVerifies(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	withDist(t, fr.base("go-pkgx/bottles"))
+	withDist(t, fr.base("go-zpkg/bottles"))
 	c, err := NewOCIClient(DistBase)
 	if err != nil {
 		t.Fatal(err)
@@ -221,7 +221,7 @@ func TestSpecOfReadsAndVerifies(t *testing.T) {
 func TestSpecOfRefusesATagThatDisagrees(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	withDist(t, fr.base("go-pkgx/bottles"))
+	withDist(t, fr.base("go-zpkg/bottles"))
 	c, err := NewOCIClient(DistBase)
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +256,7 @@ func TestSpecOfRefusesATagThatDisagrees(t *testing.T) {
 func TestSpecOfOnABottleWithoutOne(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	withDist(t, fr.base("go-pkgx/bottles"))
+	withDist(t, fr.base("go-zpkg/bottles"))
 	c, err := NewOCIClient(DistBase)
 	if err != nil {
 		t.Fatal(err)

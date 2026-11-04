@@ -151,9 +151,9 @@ func TestAnEmptySpecHasNoHash(t *testing.T) {
 func TestTheHashIgnoresWhereTheBottleWillLand(t *testing.T) {
 	c := Concrete{Platform: "linux/x86-64", Variants: Variants{"cuda": {"true"}}}
 	before := c.Hash()
-	t.Setenv("PKGX_DIR", "/scratch/someone/pkgx")
+	t.Setenv("ZPKG_DIR", "/scratch/someone/pkgx")
 	if after := c.Hash(); after != before {
-		t.Errorf("the hash moved with PKGX_DIR: %q then %q", before, after)
+		t.Errorf("the hash moved with ZPKG_DIR: %q then %q", before, after)
 	}
 	if strings.Contains(c.Canonical(), "/scratch") {
 		t.Error("the canonical form names an install prefix")

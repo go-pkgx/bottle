@@ -1,10 +1,10 @@
 package bottle
 
-// config.go loads user defaults for the go-pkgx tools from ~/.pkgx/config.hcl2.
+// config.go loads user defaults for the go-zpkg tools from ~/.pkgx/config.hcl2.
 //
 // The file is an HCL2 top-level-attribute settings file: a flat list of
 // `NAME = <value>` attributes (no blocks), where <value> is a string, bool, or
-// number. Any PKGX_* / OCI_* variable the tools read can be given a default
+// number. Any ZPKG_* / OCI_* variable the tools read can be given a default
 // here. It is parsed with the real HCL2 library (github.com/hashicorp/hcl/v2)
 // via the generic JustAttributes API, so every attribute is handled uniformly
 // and the standard HCL2 comment/quoting/escape rules apply.
@@ -29,8 +29,8 @@ var lookupEnv = os.LookupEnv
 
 // configPathFn resolves the config file path. It is a var so tests can point it
 // at a temporary file (or make it fail). It is deliberately based on the user
-// home directory — always ~/.pkgx/config.hcl2 — and NOT on PKGX_DIR, both to
-// avoid a circular dependency (PKGX_DIR is itself resolved through Env) and
+// home directory — always ~/.pkgx/config.hcl2 — and NOT on ZPKG_DIR, both to
+// avoid a circular dependency (ZPKG_DIR is itself resolved through Env) and
 // because the location is a fixed, well-known settings path.
 var configPathFn = func() (string, error) {
 	home, err := os.UserHomeDir()
@@ -98,7 +98,7 @@ func parseConfigFile(path string) (map[string]string, error) {
 
 // ctyToString renders a scalar cty value as the string form the tools consume:
 // a string as-is, a bool as "true"/"false", and a number without trailing
-// zeros (so `PKGX_VERIFY = true` → "true" and a port stays clean). Any other
+// zeros (so `ZPKG_VERIFY = true` → "true" and a port stays clean). Any other
 // type (list, object, null, …) is rejected — the settings file is scalar-only.
 func ctyToString(v cty.Value) (string, error) {
 	switch v.Type() {
@@ -120,7 +120,7 @@ func ctyToString(v cty.Value) (string, error) {
 	}
 }
 
-// Env resolves a variable for the go-pkgx tools. A real process environment
+// Env resolves a variable for the go-zpkg tools. A real process environment
 // variable that is set AND non-empty wins; otherwise the value from
 // ~/.pkgx/config.hcl2 is returned; otherwise the empty string.
 func Env(name string) string {

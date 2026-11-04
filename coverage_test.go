@@ -325,7 +325,7 @@ func TestNewOCIClientEmptyHost(t *testing.T) {
 func TestOCICredentialCallback(t *testing.T) {
 	fr := newFakeRegistry(t, true) // require "Bearer test-token"
 	defer fr.close()
-	base := fr.base("go-pkgx/bottles")
+	base := fr.base("go-zpkg/bottles")
 	// A pre-issued OCI_TOKEN is used directly as the bearer; building it via the
 	// env seam sets the Credential callback, which the auth flow then invokes.
 	c, err := newOCIClientEnv(base, func(k string) string {
@@ -345,7 +345,7 @@ func TestOCICredentialCallback(t *testing.T) {
 func TestOCIListTagsPullBadProject(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	bad := "BAD..name/../x"
 	if _, err := c.ListTags(bad); err == nil {
 		t.Error("ListTags should error for a bad project")
@@ -382,7 +382,7 @@ func pushSinglePlatformManifest(t *testing.T, c *OCIClient, project, ver, layerM
 func TestOCIPullNoBottleLayer(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	// a single-platform manifest whose only layer is not a recognised bottle.
 	pushSinglePlatformManifest(t, c, "nolayer.test", "1.0.0", "application/vnd.oci.empty.v1+json", []byte("{}"))
 	if _, _, err := c.Pull("nolayer.test", "1.0.0", "linux", "x86-64"); err == nil ||
@@ -394,7 +394,7 @@ func TestOCIPullNoBottleLayer(t *testing.T) {
 func TestOCIPullLayerFetchError(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err := c.Push("layer.fail", "1.0.0", "linux", "x86-64", makeGzTarball("body"), ".tar.gz"); err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +411,7 @@ func TestOCIPullLayerFetchError(t *testing.T) {
 func TestOCIResolvePlatformReadError(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err := c.Push("corrupt.test", "1.0.0", "linux", "x86-64", makeGzTarball("body"), ".tar.gz"); err != nil {
 		t.Fatal(err)
 	}
@@ -425,7 +425,7 @@ func TestOCIResolvePlatformReadError(t *testing.T) {
 func TestOCIUnmarshalErrors(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	repo := c.repoName("bad.json")
 	// index media type + invalid JSON -> the index unmarshal branch.
 	fr.injectManifest(repo, "1.0.0", ocispec.MediaTypeImageIndex, []byte("{not json"))
@@ -442,7 +442,7 @@ func TestOCIUnmarshalErrors(t *testing.T) {
 func TestOCIVerifyBottleSigFetchError(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	tarball := makeGzTarball("sig-body")
 	// push with a signature referrer whose annotation/payload are well-formed.
 	_, err := c.PushWithReferrers("sigfetch.test", "1.0.0", "linux", "x86-64", tarball, ".tar.gz",
@@ -470,7 +470,7 @@ func TestOCIVerifyBottleSigFetchError(t *testing.T) {
 func TestOCIPushLayerFailure(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	// fail every blob upload -> the layer push (and its re-Exists recheck) fail.
 	fr.hook = func(r *http.Request) (int, bool) {
 		_, verb, _ := splitV2(r.URL.Path)
@@ -484,7 +484,7 @@ func TestOCIPushLayerFailure(t *testing.T) {
 func TestOCIPushBlobRaceThenPackFailure(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	tarball := makeGzTarball("racebody")
 	layerMedia := MediaBottleLayerGz
 	ld := orascontent.NewDescriptorFromBytes(layerMedia, tarball)
@@ -523,7 +523,7 @@ func TestIndexRetryBackoffDefault(t *testing.T) {
 func TestFetchOrNewIndexNonIndexAndBadJSON(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 
 	// (a) version tag already points at a plain image manifest (not an index):
 	// fetchOrNewIndex must treat it as absent and start fresh, then Push succeeds.
@@ -579,13 +579,13 @@ func TestOCIVersionsForClientError(t *testing.T) {
 func TestOCIVersionsForSorted(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	for _, v := range []string{"2.0.0", "1.0.0", "1.5.0"} {
 		if err := c.Push("multi.test", v, "linux", "x86-64", makeGzTarball(v), ".tar.gz"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	withDist(t, fr.base("go-pkgx/bottles"))
+	withDist(t, fr.base("go-zpkg/bottles"))
 	vs, err := VersionsFor("multi.test", "linux", "x86-64")
 	if err != nil || len(vs) != 3 {
 		t.Fatalf("VersionsFor n=%d err=%v", len(vs), err)
@@ -604,7 +604,7 @@ func TestPickVersionFetchError(t *testing.T) {
 
 func TestDownloadBottleOCIClientError(t *testing.T) {
 	withDist(t, "oci://hostonly")
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	if _, _, err := DownloadBottle("p", "1.0.0", "linux", "x86-64"); err == nil {
 		t.Error("expected OCI client error")
 	}
@@ -612,7 +612,7 @@ func TestDownloadBottleOCIClientError(t *testing.T) {
 
 func TestDownloadBottleHTTPGetError(t *testing.T) {
 	withDist(t, "http://127.0.0.1:0") // no listener
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	if _, _, err := DownloadBottle("p", "1.0.0", "linux", "x86-64"); err == nil {
 		t.Error("expected HTTP GET (dial) error")
 	}
@@ -630,7 +630,7 @@ func TestDownloadBottleHTTPReadError(t *testing.T) {
 	}))
 	defer srv.Close()
 	withDist(t, srv.URL)
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	if _, _, err := DownloadBottle("p", "1.0.0", "linux", "x86-64"); err == nil {
 		t.Error("expected body read error on truncated response")
 	}
@@ -728,10 +728,10 @@ func ociXzBottle(t *testing.T, project, ver string, files map[string]string) []b
 }
 
 func TestInstallOverOCIGzAndXz(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0") // transport round-trip on unsigned bottles
+	t.Setenv("ZPKG_VERIFY", "0") // transport round-trip on unsigned bottles
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	osn, arch := HostSlug()
 	if err := c.Push("gz.pkg", "1.0.0", osn, arch, ociGzBottle(t, "gz.pkg", "1.0.0", map[string]string{"bin/g": "x"}), ".tar.gz"); err != nil {
 		t.Fatal(err)
@@ -739,7 +739,7 @@ func TestInstallOverOCIGzAndXz(t *testing.T) {
 	if err := c.Push("xz.pkg", "1.0.0", osn, arch, ociXzBottle(t, "xz.pkg", "1.0.0", map[string]string{"bin/x": "y"}), ".tar.xz"); err != nil {
 		t.Fatal(err)
 	}
-	withDist(t, fr.base("go-pkgx/bottles"))
+	withDist(t, fr.base("go-zpkg/bottles"))
 	dir := t.TempDir()
 
 	if fresh, err := Install(Resolved{"gz.pkg", ParseVer("1.0.0")}, dir); err != nil || !fresh {
@@ -760,10 +760,10 @@ func TestInstallOverOCIErrors(t *testing.T) {
 	skipOnWASI(t, wasiNoChmod)
 	// Decode/extract errors on unsigned fixtures: without the opt-out the
 	// fail-closed check refuses them first and none of these branches is reached.
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	osn, arch := HostSlug()
 
 	// a .tar.gz layer whose bytes are not gzip -> gzip.NewReader error.
@@ -792,7 +792,7 @@ func TestInstallOverOCIErrors(t *testing.T) {
 	if err := c.Push("ok.pkg", "1.0.0", osn, arch, ociGzBottle(t, "ok.pkg", "1.0.0", map[string]string{"bin/o": "x"}), ".tar.gz"); err != nil {
 		t.Fatal(err)
 	}
-	withDist(t, fr.base("go-pkgx/bottles"))
+	withDist(t, fr.base("go-zpkg/bottles"))
 
 	if _, err := Install(Resolved{"badgz.pkg", ParseVer("1.0.0")}, t.TempDir()); err == nil {
 		t.Error("expected gzip reader error")
@@ -853,7 +853,7 @@ func TestFetchBottleOCIClientError(t *testing.T) {
 }
 
 func TestFetchBottleHTTPGetError(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0") // transport error path: an HTTP dist is unverifiable by design
+	t.Setenv("ZPKG_VERIFY", "0") // transport error path: an HTTP dist is unverifiable by design
 	withDist(t, "http://127.0.0.1:0")
 	if _, _, err := fetchBottle(Resolved{"a/b", ParseVer("1.0.0")}, "linux", "x86-64"); err == nil {
 		t.Error("expected HTTP GET (dial) error in fetchBottle")

@@ -1,4 +1,4 @@
-// Copyright (c) 2026, the go-pkgx/bottle authors
+// Copyright (c) 2026, the go-zpkg/bottle authors
 // All rights reserved.
 //
 // SPDX-License-Identifier: BSD-3-Clause
@@ -143,7 +143,7 @@ func Extract(tr *tar.Reader, dest string, strip int) error {
 			// reaches outside the destination on the second entry, which is
 			// the classic tar symlink traversal. Nothing in this factory
 			// ships such an archive, and "our bottles are signed" is not the
-			// property an extractor should rely on — PKGX_VERIFY=0 is a
+			// property an extractor should rely on — ZPKG_VERIFY=0 is a
 			// supported mode for a loopback registry, and an extractor is
 			// exactly where defence in depth belongs.
 			//

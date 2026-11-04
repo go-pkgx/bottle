@@ -28,10 +28,10 @@ func clobberIndexEmpty(t *testing.T, c *OCIClient, project, ver string) {
 // TestEnsureIndexedRepairsALateClobber is the pass that catches what the
 // per-push reconcile cannot: a racer that lands after the publisher moved on.
 func TestEnsureIndexedRepairsALateClobber(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, err := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,10 +65,10 @@ func TestEnsureIndexedRepairsALateClobber(t *testing.T) {
 // TestEnsureIndexedIsANoOpWhenIntact: the pass runs over every bottle a batch
 // published, so the common case must cost one read and change nothing.
 func TestEnsureIndexedIsANoOpWhenIntact(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, err := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,10 +90,10 @@ func TestEnsureIndexedIsANoOpWhenIntact(t *testing.T) {
 // re-write. A platform some other publisher added while we were away has to
 // survive, or the repair becomes the next clobber.
 func TestEnsureIndexedPreservesAnotherPlatform(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, err := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,10 +142,10 @@ func TestEnsureIndexedReportsABadRepo(t *testing.T) {
 // so. Silently returning "not repaired" would turn a corrupt index into a
 // clean-looking run.
 func TestEnsureIndexedSurfacesAFailedRepair(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, err := NewOCIClient(fr.base("go-zpkg/bottles"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -71,7 +71,7 @@ func blobClient(t *testing.T, srv *httptest.Server) (*OCIClient, ocispec.Descrip
 		Digest: digest.Digest("sha256:" + hex.EncodeToString(sum[:])),
 		Size:   int64(len(payload)),
 	}
-	c, err := NewOCIClient("oci://" + strings.TrimPrefix(srv.URL, "http://") + "/go-pkgx/bottles")
+	c, err := NewOCIClient("oci://" + strings.TrimPrefix(srv.URL, "http://") + "/go-zpkg/bottles")
 	if err != nil {
 		t.Fatal(err)
 	}

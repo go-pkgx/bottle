@@ -26,10 +26,10 @@ func TestAVersionListSaysWhichRegistryItCameFrom(t *testing.T) {
 	// all, which is how ghcr answers for anything unmirrored.
 	up, hits := upstreamVersionsServer(t, "doxygen.nl", "linux", "aarch64", []string{"1.14.0"})
 	oldDist, oldUp := DistBase, UpstreamDist
-	DistBase, UpstreamDist = fr.base("go-pkgx/packages"), up
+	DistBase, UpstreamDist = fr.base("go-zpkg/packages"), up
 	defer func() { DistBase, UpstreamDist = oldDist, oldUp; resetOCICache() }()
 	resetOCICache()
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 
 	vs, fromRegistry, err := VersionsForSourced("doxygen.nl", "linux", "aarch64")
 	if err != nil {
@@ -82,7 +82,7 @@ func TestAVersionListSaysWhichRegistryItCameFrom(t *testing.T) {
 // a test has a project that really is carried HERE.
 func pushTwoVersions(t *testing.T, fr *fakeRegistry, project, osn, arch string) bool {
 	t.Helper()
-	c, err := NewOCIClient(fr.base("go-pkgx/packages"))
+	c, err := NewOCIClient(fr.base("go-zpkg/packages"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,4 +1,4 @@
-module github.com/go-pkgx/bottle
+module github.com/go-zpkg/bottle
 
 go 1.27.3
 

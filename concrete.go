@@ -162,7 +162,7 @@ const canonSep = "\x00"
 // without a delimiter would give two builds one: {"ab","c"} and {"a","bc"}
 // hash alike the moment the separator is "". Both are tested.
 //
-// ⛔ AND THE INSTALL PREFIX IS NOT IN IT. $PKGX_DIR is where a bottle lands,
+// ⛔ AND THE INSTALL PREFIX IS NOT IN IT. $ZPKG_DIR is where a bottle lands,
 // not what it is. Nix states the consequence of getting this wrong: "One
 // cannot copy a store object to a store with a different store directory",
 // and a cache stops being shareable the moment identity depends on where the

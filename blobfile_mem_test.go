@@ -24,7 +24,7 @@ func memBlobFixture(t *testing.T, body []byte) (*OCIClient, ocispec.Descriptor) 
 	}))
 	t.Cleanup(srv.Close)
 	sum := sha256.Sum256(body)
-	c, err := NewOCIClient("oci://" + strings.TrimPrefix(srv.URL, "http://") + "/go-pkgx/bottles")
+	c, err := NewOCIClient("oci://" + strings.TrimPrefix(srv.URL, "http://") + "/go-zpkg/bottles")
 	if err != nil {
 		t.Fatal(err)
 	}

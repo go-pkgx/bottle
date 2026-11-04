@@ -38,8 +38,8 @@ func TestTheStorePathCanNameItsPlatform(t *testing.T) {
 // Dir is the single point every command resolves the store through, so the
 // expansion has to happen there or it happens nowhere.
 func TestDirExpandsThePlaceholder(t *testing.T) {
-	t.Setenv("PKGX_CONFIG", "")
-	t.Setenv("PKGX_DIR", filepath.Join("/shared", "pkgx", "{platform}"))
+	t.Setenv("ZPKG_CONFIG", "")
+	t.Setenv("ZPKG_DIR", filepath.Join("/shared", "pkgx", "{platform}"))
 	osn, arch := HostSlug()
 	want := filepath.Join("/shared", "pkgx", osn+"-"+arch)
 	if got := Dir(); got != want {

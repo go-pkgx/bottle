@@ -39,7 +39,7 @@ func TestVerifyRequired(t *testing.T) {
 	setConfigPath(t, filepath.Join(t.TempDir(), "absent.hcl2"))
 	set := func(v string, present bool) {
 		lookupEnv = func(k string) (string, bool) {
-			if k == "PKGX_VERIFY" {
+			if k == "ZPKG_VERIFY" {
 				return v, present
 			}
 			return "", false
@@ -49,36 +49,36 @@ func TestVerifyRequired(t *testing.T) {
 	for _, v := range []string{"1", "true", "TRUE", "yes", "on", "maybe"} {
 		set(v, true)
 		if !VerifyRequired() {
-			t.Errorf("PKGX_VERIFY=%q should require verify", v)
+			t.Errorf("ZPKG_VERIFY=%q should require verify", v)
 		}
 	}
 	// Unset (absent) also verifies.
 	set("", false)
 	if !VerifyRequired() {
-		t.Error("unset PKGX_VERIFY should require verify")
+		t.Error("unset ZPKG_VERIFY should require verify")
 	}
 	// Only an explicit opt-out disables it.
 	for _, v := range []string{"0", "false", "FALSE", "off", "no"} {
 		set(v, true)
 		if VerifyRequired() {
-			t.Errorf("PKGX_VERIFY=%q should not require verify", v)
+			t.Errorf("ZPKG_VERIFY=%q should not require verify", v)
 		}
 	}
 }
 
 func TestVerifyRequiredFromConfig(t *testing.T) {
 	// With no env var, the config file value disables verification.
-	writeConfig(t, `PKGX_VERIFY = false`)
+	writeConfig(t, `ZPKG_VERIFY = false`)
 	setLookup(nil)
 	if VerifyRequired() {
-		t.Error("config PKGX_VERIFY=false should disable verification")
+		t.Error("config ZPKG_VERIFY=false should disable verification")
 	}
 }
 
 func TestVerifyBottle(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	kp, err := sign.Generate()
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +115,7 @@ func TestVerifyBottle(t *testing.T) {
 func TestVerifyBottleMalformedSig(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	tarball := makeGzTarball("x")
 	// a signature referrer with no cosign annotation → malformed
 	_, err := c.PushWithReferrers("malformed.sig", "1.0.0", "linux", "x86-64", tarball, ".tar.gz",
@@ -132,7 +132,7 @@ func TestVerifyBottleMalformedSig(t *testing.T) {
 func TestDownloadBottleVerify(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	kp, err := sign.Generate()
 	if err != nil {
 		t.Fatal(err)
@@ -146,22 +146,22 @@ func TestDownloadBottleVerify(t *testing.T) {
 	pushSignedBottle(t, c, "dl.unsigned", kp, tarball, false)
 
 	oldDist := DistBase
-	DistBase = fr.base("go-pkgx/bottles")
+	DistBase = fr.base("go-zpkg/bottles")
 	resetOCICache()
 	defer func() { DistBase = oldDist; resetOCICache() }()
 
-	// PKGX_VERIFY + signed OCI bottle → succeeds
-	t.Setenv("PKGX_VERIFY", "1")
+	// ZPKG_VERIFY + signed OCI bottle → succeeds
+	t.Setenv("ZPKG_VERIFY", "1")
 	if _, _, err := DownloadBottle("dl.signed", "1.0.0", "linux", "x86-64"); err != nil {
 		t.Fatalf("signed download+verify: %v", err)
 	}
-	// PKGX_VERIFY + unsigned OCI bottle → fail closed
+	// ZPKG_VERIFY + unsigned OCI bottle → fail closed
 	if _, _, err := DownloadBottle("dl.unsigned", "1.0.0", "linux", "x86-64"); err == nil {
-		t.Error("unsigned bottle passed under PKGX_VERIFY")
+		t.Error("unsigned bottle passed under ZPKG_VERIFY")
 	}
-	// with verification explicitly opted out (PKGX_VERIFY=0), an unsigned bottle
+	// with verification explicitly opted out (ZPKG_VERIFY=0), an unsigned bottle
 	// downloads fine (verify is on by default, so this needs the opt-out).
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	if _, _, err := DownloadBottle("dl.unsigned", "1.0.0", "linux", "x86-64"); err != nil {
 		t.Errorf("unverified download: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestVerifyBottleFetchFailures(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			fr := newFakeRegistry(t, false)
 			defer fr.close()
-			c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+			c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 			pushSignedBottle(t, c, "fetch.fail", kp, tarball, true)
 			fr.hook = func(r *http.Request) (int, bool) {
 				_, verb, ref := splitV2(r.URL.Path)
@@ -202,11 +202,11 @@ func TestDownloadBottleVerifyHTTP(t *testing.T) {
 	oldDist := DistBase
 	DistBase = "https://dist.example.test"
 	defer func() { DistBase = oldDist }()
-	t.Setenv("PKGX_VERIFY", "1")
+	t.Setenv("ZPKG_VERIFY", "1")
 	// the HTTP transport has no signatures → fail closed before any fetch
 	if _, _, err := DownloadBottle("p", "1.0.0", "linux", "x86-64"); err == nil ||
-		!strings.Contains(err.Error(), "PKGX_VERIFY") {
-		t.Errorf("HTTP under PKGX_VERIFY should fail closed, got %v", err)
+		!strings.Contains(err.Error(), "ZPKG_VERIFY") {
+		t.Errorf("HTTP under ZPKG_VERIFY should fail closed, got %v", err)
 	}
 }
 
@@ -214,7 +214,7 @@ func TestDownloadBottleVerifyHTTP(t *testing.T) {
 // pkgx and pkgm advertise — "verifying each bottle's signature (fail-closed)" —
 // was enforced in DownloadBottle, which only the MIRROR tooling calls. Every
 // actual install went through fetchBottle, which checked nothing, so
-// `PKGX_VERIFY=1 pkgx +pkg` cheerfully installed an unsigned bottle. Measured on
+// `ZPKG_VERIFY=1 pkgx +pkg` cheerfully installed an unsigned bottle. Measured on
 // a real registry before the fix.
 func TestInstallVerify(t *testing.T) {
 	// pushSignedBottle publishes for linux/x86-64; Install resolves for the host.
@@ -222,7 +222,7 @@ func TestInstallVerify(t *testing.T) {
 	setGoarch(t, "x86-64")
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, _ := NewOCIClient(fr.base("go-pkgx/bottles"))
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
 	kp, err := sign.Generate()
 	if err != nil {
 		t.Fatal(err)
@@ -237,11 +237,11 @@ func TestInstallVerify(t *testing.T) {
 	pushSignedBottle(t, c, "inst.unsigned", kp, unsigned, false)
 
 	oldDist := DistBase
-	DistBase = fr.base("go-pkgx/bottles")
+	DistBase = fr.base("go-zpkg/bottles")
 	resetOCICache()
 	defer func() { DistBase = oldDist; resetOCICache() }()
 
-	t.Setenv("PKGX_VERIFY", "1")
+	t.Setenv("ZPKG_VERIFY", "1")
 	// signed → installs
 	if fresh, err := Install(Resolved{"inst.signed", ParseVer("1.0.0")}, t.TempDir()); err != nil || !fresh {
 		t.Fatalf("signed install fresh=%v err=%v", fresh, err)
@@ -249,7 +249,7 @@ func TestInstallVerify(t *testing.T) {
 	// unsigned → refused, and nothing is written
 	dir := t.TempDir()
 	if _, err := Install(Resolved{"inst.unsigned", ParseVer("1.0.0")}, dir); err == nil {
-		t.Error("an unsigned bottle installed under PKGX_VERIFY")
+		t.Error("an unsigned bottle installed under ZPKG_VERIFY")
 	} else if !strings.Contains(err.Error(), "unsigned") {
 		t.Errorf("install error = %v, want it to name the missing signature", err)
 	}
@@ -257,7 +257,7 @@ func TestInstallVerify(t *testing.T) {
 		t.Error("refused bottle left files behind")
 	}
 	// explicit opt-out → installs, as documented
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	if fresh, err := Install(Resolved{"inst.unsigned", ParseVer("1.0.0")}, t.TempDir()); err != nil || !fresh {
 		t.Errorf("opted-out install fresh=%v err=%v", fresh, err)
 	}
@@ -269,9 +269,9 @@ func TestInstallVerifyHTTP(t *testing.T) {
 	oldDist := DistBase
 	DistBase = "https://dist.example.test"
 	defer func() { DistBase = oldDist }()
-	t.Setenv("PKGX_VERIFY", "1")
+	t.Setenv("ZPKG_VERIFY", "1")
 	if _, err := Install(Resolved{"p", ParseVer("1.0.0")}, t.TempDir()); err == nil ||
-		!strings.Contains(err.Error(), "PKGX_VERIFY") {
-		t.Errorf("HTTP install under PKGX_VERIFY should fail closed, got %v", err)
+		!strings.Contains(err.Error(), "ZPKG_VERIFY") {
+		t.Errorf("HTTP install under ZPKG_VERIFY should fail closed, got %v", err)
 	}
 }

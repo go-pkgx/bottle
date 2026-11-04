@@ -17,7 +17,7 @@ import (
 // onto an occupied directory, took the concurrent-install branch, and
 // returned (false, nil): "already installed". Nothing was installed. The
 // caller then ran a binary under a prefix that had never been created and
-// got a bare "no such file or directory" — go-pkgx/bk#386, found on the
+// got a bare "no such file or directory" — go-zpkg/bk#386, found on the
 // first real use of the rebuild counter.
 //
 // Measured before the fix, against the published fftw.org 3.3.11_1:

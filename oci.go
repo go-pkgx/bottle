@@ -4,12 +4,12 @@ package bottle
 // (oras.land/oras-go/v2) — the reference implementation for pulling and pushing
 // OCI artifacts. Pure Go, CGO_ENABLED=0.
 //
-// A dist ref beginning with "oci://" (e.g. PKGX_DIST=oci://ghcr.io/go-pkgx/bottles)
+// A dist ref beginning with "oci://" (e.g. ZPKG_DIST=oci://ghcr.io/go-zpkg/bottles)
 // selects this transport instead of the static-HTTP tree. Bottles are mapped to
 // OCI artifacts Homebrew-style:
 //
 //   - repo   = <oci-base-repo>/<project>            (project lowercased; OCI repos
-//              allow '/' and '.'). e.g. go-pkgx/bottles/openssl.org
+//              allow '/' and '.'). e.g. go-zpkg/bottles/openssl.org
 //   - tag    = the version                          (e.g. "1.1.1w")
 //   - the manifest at that tag is an OCI image INDEX whose manifests[] each carry
 //     platform{os,architecture} and point at a per-platform image manifest.
@@ -119,7 +119,7 @@ func extForLayer(mt string) string {
 // lives in one place (ORAS).
 type OCIClient struct {
 	host      string // registry host[:port]
-	repoBase  string // base repo path within the registry, e.g. "go-pkgx/bottles"
+	repoBase  string // base repo path within the registry, e.g. "go-zpkg/bottles"
 	plainHTTP bool   // use http:// (localhost/loopback or explicit http scheme)
 	client    *auth.Client
 }
@@ -281,11 +281,11 @@ func (c *OCIClient) ListTags(project string) ([]string, error) {
 //
 // A caller could already ask "is THIS platform published" one guess at a time
 // — HasPlatform does that — and could not ask which ones are. ⛔ Measured
-// 2026-10-20: `go-pkgx/packages`' daily CVE lane carried its platform list in
+// 2026-10-20: `go-zpkg/packages`' daily CVE lane carried its platform list in
 // the workflow file, the list said two, and the registry published SIX. The
 // four nobody asked about were clean, so the cost was coverage rather than an
 // exposure, but the mechanism guarantees the next platform is missed too
-// (go-pkgx/pkgx#119).
+// (go-zpkg/pkgx#119).
 //
 // ⛔ AN EMPTY LIST IS AN ERROR, NEVER AN ANSWER. fetchOrNewIndex, the other
 // reader of this document, turns every failure into an empty index on purpose
@@ -411,7 +411,7 @@ func (c *OCIClient) PullFile(project, ver, osn, arch string) (*BlobFile, string,
 }
 
 // PlatformAnnotations returns the annotations on the per-platform image
-// manifest — the map a publish attaches, e.g. org.go-pkgx.abi.provides.
+// manifest — the map a publish attaches, e.g. org.go-zpkg.abi.provides.
 //
 // Separate from PullFile on purpose: the cache may serve the bottle, and a
 // mirror's manifest is not the authority on what the bottle DECLARES. This
@@ -618,7 +618,7 @@ func (c *OCIClient) PushWithReferrers(project, ver, osn, arch string, tarball []
 
 // PushWithReferrersAnnotated is PushWithReferrers plus annotations merged onto
 // the per-platform image manifest — used to carry descriptive metadata such as
-// org.go-pkgx.glibc.version and org.go-pkgx.glibc.min-kernel so glibc-flavored
+// org.go-zpkg.glibc.version and org.go-zpkg.glibc.min-kernel so glibc-flavored
 // bottles are self-describing.
 func (c *OCIClient) PushWithReferrersAnnotated(project, ver, osn, arch string, tarball []byte, ext string, refs []Referrer, annotations map[string]string) (ocispec.Descriptor, error) {
 	return c.push(project, ver, osn, arch, tarball, ext, refs, annotations)

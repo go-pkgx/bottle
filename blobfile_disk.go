@@ -44,7 +44,7 @@ import (
 // it deletes seconds later.
 //
 // It falls back to the system temp directory when the store cannot be
-// made — a read-only $PKGX_DIR is somebody's deliberate arrangement, and
+// made — a read-only $ZPKG_DIR is somebody's deliberate arrangement, and
 // refusing to fetch at all would be a worse answer than the behaviour
 // every release until now had.
 func blobStagingDir() string {

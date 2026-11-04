@@ -38,7 +38,7 @@ import (
 // separate matter. An unset variable, a missing file or an unreadable one all
 // mean an empty list, i.e. exactly the behaviour without this feature; an
 // unparsable file is reported once on stderr and also means an empty list.
-const DeprecatedEnv = "PKGX_DEPRECATED"
+const DeprecatedEnv = "ZPKG_DEPRECATED"
 
 // DefaultDeprecated is the list used when DeprecatedEnv is unset.
 //

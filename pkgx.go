@@ -23,15 +23,15 @@ import (
 )
 
 // Base URLs for the pkgx distribution + pantry; overridable in tests, and at
-// runtime via $PKGX_DIST / $PKGX_PANTRY so a consumer can point pkgm/pkgx at a
+// runtime via $ZPKG_DIST / $ZPKG_PANTRY so a consumer can point pkgm/pkgx at a
 // local mirror produced by the `mirror` tool.
 //
-// DistBase defaults to the **signed** go-pkgx OCI registry so the default install
+// DistBase defaults to the **signed** go-zpkg OCI registry so the default install
 // path is verifiable end-to-end (pairs with VerifyRequired defaulting on). That
 // registry is a growing subset of the pantry; for the full upstream catalogue set
-// PKGX_DIST=https://dist.pkgx.dev (unsigned → also set PKGX_VERIFY=0).
+// ZPKG_DIST=https://dist.pkgx.dev (unsigned → also set ZPKG_VERIFY=0).
 var (
-	DistBase   = "oci://ghcr.io/go-pkgx/packages"
+	DistBase   = "oci://ghcr.io/go-zpkg/packages"
 	PantryBase = "https://raw.githubusercontent.com/pkgxdev/pantry/main/projects"
 
 	// PantryOverlay is MERGED OVER PantryBase for a project's package.yml: a
@@ -44,11 +44,11 @@ var (
 	// This said "consulted BEFORE PantryBase, falling back when the overlay
 	// has no recipe" until #103, and that description outlived the code by
 	// long enough to matter. Preferring the overlay WHOLE was right while every
-	// entry was a full copy of an upstream recipe; go-pkgx/pantry-overlay#50
+	// entry was a full copy of an upstream recipe; go-zpkg/pantry-overlay#50
 	// then reduced all 183 to the keys they change, so an entry read whole is a
 	// FRAGMENT — under the old rule curl.se would resolve to `dependencies` and
 	// nothing else, with no distributable and no build. bk read one that way
-	// and its closure collapsed from 54 projects to 8 (go-pkgx/bk#232).
+	// and its closure collapsed from 54 projects to 8 (go-zpkg/bk#232).
 	//
 	// A comment that describes a superseded rule is worse than none, because it
 	// is believed: this is the second one found today.
@@ -67,9 +67,9 @@ var (
 	// binary died on a library nothing had installed. The corrected recipe was
 	// in the overlay the whole time, and nothing consulted it.
 	//
-	// PKGX_PANTRY_OVERLAY overrides it; "none" turns it off and resolves
+	// ZPKG_PANTRY_OVERLAY overrides it; "none" turns it off and resolves
 	// everything upstream.
-	PantryOverlay = "https://raw.githubusercontent.com/go-pkgx/pantry-overlay/main/projects"
+	PantryOverlay = "https://raw.githubusercontent.com/go-zpkg/pantry-overlay/main/projects"
 
 	// UpstreamDist is the canonical pkgx distribution used to list versions for
 	// projects that are not (yet) published to an OCI DistBase — typically
@@ -79,7 +79,7 @@ var (
 	UpstreamDist = "https://dist.pkgx.dev"
 
 	// ImplicitRootsOff drops the implicit system-library roots from closure
-	// completion. See implicitRoots; set from PKGX_IMPLICIT_ROOTS=none.
+	// completion. See implicitRoots; set from ZPKG_IMPLICIT_ROOTS=none.
 	ImplicitRootsOff = false
 
 	// CacheBase is an OCI registry consulted for the BOTTLE ITSELF before
@@ -91,7 +91,7 @@ var (
 	// falls back to the upstream dist, which yields a VERSION where our registry
 	// wants a TAG — gnu.org/bash is published as `5.3`, not `5.3.0` — and the
 	// pull then 404s on a tag that never existed. Measured; it is why this is a
-	// separate variable and not simply PKGX_DIST pointed elsewhere.
+	// separate variable and not simply ZPKG_DIST pointed elsewhere.
 	//
 	// What the cache serves is still verified against the signature DistBase
 	// advertises, so a cache that returns the wrong bytes is rejected rather
@@ -103,7 +103,7 @@ func init() { applyEnv(Env) }
 
 // ociClientCache memoises OCIClients by dist base so the bearer-token cache is
 // reused across calls (and rebuilds automatically when DistBase changes, e.g. in
-// tests or when a consumer re-points PKGX_DIST).
+// tests or when a consumer re-points ZPKG_DIST).
 var (
 	ociClientCache = map[string]*OCIClient{}
 	ociClientMu    sync.Mutex
@@ -140,15 +140,15 @@ func ociClientFor(base string) (*OCIClient, error) {
 	return c, nil
 }
 
-// applyEnv overrides DistBase/PantryBase from PKGX_DIST/PKGX_PANTRY (testable).
+// applyEnv overrides DistBase/PantryBase from ZPKG_DIST/ZPKG_PANTRY (testable).
 func applyEnv(get func(string) string) {
-	if d := get("PKGX_DIST"); d != "" {
+	if d := get("ZPKG_DIST"); d != "" {
 		DistBase = strings.TrimRight(d, "/")
 	}
-	if p := get("PKGX_PANTRY"); p != "" {
+	if p := get("ZPKG_PANTRY"); p != "" {
 		PantryBase = strings.TrimRight(p, "/")
 	}
-	// PKGX_IMPLICIT_ROOTS=none says the MACHINE supplies the implicit system
+	// ZPKG_IMPLICIT_ROOTS=none says the MACHINE supplies the implicit system
 	// libraries -- libc, and the gcc runtime when something links it -- so a
 	// closure must not reach for bottles of them. It is named after the
 	// function it disables rather than after glibc, because it governs all
@@ -156,20 +156,20 @@ func applyEnv(get func(string) string) {
 	//
 	// "none" rather than an empty value, for the reason the overlay below
 	// gives, and "none" rather than a boolean so the two knobs read alike.
-	if r := get("PKGX_IMPLICIT_ROOTS"); r == "none" {
+	if r := get("ZPKG_IMPLICIT_ROOTS"); r == "none" {
 		ImplicitRootsOff = true
 	}
 	// "none" is how a caller says "no overlay": an empty value cannot mean it,
 	// because an unset variable and one set to nothing are the same string here,
 	// and defaulting on an unset variable is the whole point.
-	if p := get("PKGX_PANTRY_OVERLAY"); p != "" {
+	if p := get("ZPKG_PANTRY_OVERLAY"); p != "" {
 		if p == "none" {
 			PantryOverlay = ""
 		} else {
 			PantryOverlay = strings.TrimRight(p, "/")
 		}
 	}
-	if c := get("PKGX_CACHE"); c != "" {
+	if c := get("ZPKG_CACHE"); c != "" {
 		CacheBase = strings.TrimRight(c, "/")
 	}
 }
@@ -246,7 +246,7 @@ func fetchSide(base, project string) (map[string]any, bool, error) {
 // upstream instead of drifting from a copy taken once.
 //
 // LISTS ARE REPLACED, not merged — the same rule the build-side overrides
-// follow (go-pkgx/bk's `logical` package). Kustomize merges some lists by a
+// follow (go-zpkg/bk's `logical` package). Kustomize merges some lists by a
 // "merge key" and replaces others and needs OpenAPI metadata to know which;
 // there is no merge key for the lines of a shell script.
 //
@@ -292,7 +292,7 @@ func recipeDoc(project string) (map[string]any, error) {
 	case hasOver:
 		// Upstream does not carry this project at all, so the overlay's copy
 		// is the whole recipe — for a consumer here and for the builder, which
-		// reads it the same way (go-pkgx/bk#231).
+		// reads it the same way (go-zpkg/bk#231).
 		return over, nil
 	case hasBase:
 		return base, nil
@@ -300,10 +300,10 @@ func recipeDoc(project string) (map[string]any, error) {
 	return nil, fmt.Errorf("no recipe for %s in %s or %s", project, PantryOverlay, PantryBase)
 }
 
-// Dir resolves the bottle store (PKGX_DIR, default ~/.pkgx), expanding the
+// Dir resolves the bottle store (ZPKG_DIR, default ~/.pkgx), expanding the
 // platform placeholders described by [ExpandStorePath].
 func Dir() string {
-	if d := Env("PKGX_DIR"); d != "" {
+	if d := Env("ZPKG_DIR"); d != "" {
 		return ExpandStorePath(d)
 	}
 	home, _ := os.UserHomeDir()
@@ -318,14 +318,14 @@ var storePlaceholders = []string{"{platform}", "{os}", "{arch}"}
 // becomes `x86-64`, all for the RUNNING machine.
 //
 // ⛔ ONE STORE CANNOT HOLD TWO ARCHITECTURES, and nothing said so. A prefix is
-// `$PKGX_DIR/<project>/v<version>/…` with no platform anywhere in it.
+// `$ZPKG_DIR/<project>/v<version>/…` with no platform anywhere in it.
 // Measured 2026-10-29 on one machine, the same project and version staged
 // twice:
 //
 //	…/openssl.org/v3.6.4/lib/libssl.so.3     ELF 64-bit x86-64
 //	…/openssl.org/v3.6.4/lib/libssl.3.dylib  Mach-O arm64
 //
-// Those two were kept apart only by being under different PKGX_DIRs. Here the
+// Those two were kept apart only by being under different ZPKG_DIRs. Here the
 // FILE NAMES differ because the operating systems do; between linux/x86-64 and
 // linux/aarch64 they are identical — `lib/libssl.so.3` both times — so a store
 // shared over NFS holds whichever architecture was installed last, and the
@@ -342,8 +342,8 @@ var storePlaceholders = []string{"{platform}", "{os}", "{arch}"}
 // carry platform, os and target) and it costs nothing here: a path with no
 // placeholder is returned unchanged, so every existing store keeps working.
 //
-//	PKGX_DIR=/shared/pkgx/{platform}     one tree per architecture, one NFS export
-//	PKGX_DIR=/shared/pkgx/{os}/{arch}    the same, split
+//	ZPKG_DIR=/shared/pkgx/{platform}     one tree per architecture, one NFS export
+//	ZPKG_DIR=/shared/pkgx/{os}/{arch}    the same, split
 //
 // ⛔ BRACES, NOT `$`: the shell expands `$PLATFORM` before pkgx ever sees it,
 // and a value the shell has already eaten cannot be resolved per node. `{…}`
@@ -951,7 +951,7 @@ func ociVersionsFor(project string) ([]Ver, error) {
 // A glibc-flavored tag (<version>-glibc<ver>) is one BUILD of a version, not a
 // version of its own: it must never outrank the plain tag it flavors
 // (2.0-glibc2.27.0 parses as 2.0.0.2.27.0 > 2.0). So flavors are matched
-// DELIBERATELY — a host that pinned PKGX_GLIBC takes the build made against that
+// DELIBERATELY — a host that pinned ZPKG_GLIBC takes the build made against that
 // glibc, every other flavor is ignored, and the result is independent of the
 // order the registry happens to list tags in.
 // numericKey is a version's canonical numeric identity: "2.44" and "2.44.0"
@@ -965,7 +965,7 @@ func ociVersionsFor(project string) ([]Ver, error) {
 // selectVersions kept whichever supersedes() preferred, and the other VANISHED
 // from every candidate list built from a registry listing.
 //
-// Measured on ghcr.io/go-pkgx/packages/fftw.org, whose tags include both:
+// Measured on ghcr.io/go-zpkg/packages/fftw.org, whose tags include both:
 // VersionsFor returned 3.3.11_1 only, and `=3.3.11` resolved to nothing at
 // all, though the bottle is published and pullable. A lock pinning a version
 // therefore STOPPED RESOLVING the day somebody rebuilt it — the reproducibility
@@ -1076,7 +1076,7 @@ func selectVersions(tags []string, wantFlavor string) []Ver {
 // had published only some versions of.
 //
 // ⛔ EXPORTED BECAUSE EVERY CALLER OF ListTags NEEDS IT AND ONE COULD NOT
-// REACH IT. `pkgs request` (go-pkgx/pkgx) filtered the listing with
+// REACH IT. `pkgs request` (go-zpkg/pkgx) filtered the listing with
 // IsPlatformTag alone, and its first live run reported a project with no
 // releases as "2 version(s) tagged" — the two being `sha256-…` referrers,
 // one of which it then asked for platforms and got "the index has 3
@@ -1087,7 +1087,7 @@ func IsVersionTag(tag string) bool { return isVersionTag(tag) }
 
 func isVersionTag(tag string) bool {
 	// THE SHAPE, not just the first byte. A tag list is what a registry
-	// says, and a registry is a configured endpoint — PKGX_DIST and the
+	// says, and a registry is a configured endpoint — ZPKG_DIST and the
 	// mirror can both be pointed elsewhere. A tag beginning with a digit
 	// and continuing into an escape sequence passed the first-byte test
 	// and went on to be printed in version lists.
@@ -1969,7 +1969,7 @@ func sortedKeys(m map[string]string) []string {
 // versioned prefix already exists), then writes major/minor convenience links.
 // Extraction is atomic — the bottle is unpacked into a temp dir and the
 // versioned prefix is renamed into place — so concurrent installs sharing one
-// PKGX_DIR never observe a half-extracted prefix.
+// ZPKG_DIR never observe a half-extracted prefix.
 // Install materialises a bottle for the HOST platform. Use InstallFor to stage
 // a rootfs for another one -- building a linux image from a mac, say.
 func Install(r Resolved, pkgxDir string) (bool, error) {
@@ -2071,7 +2071,7 @@ func InstallFor(r Resolved, pkgxDir, osn, arch string) (bool, error) {
 // onto an occupied directory, saw it occupied, and reported success having
 // installed nothing. The caller then ran a binary under a prefix that was
 // never created and got a bare `no such file or directory`
-// (go-pkgx/bk#386, found on the first real use of the rebuild counter):
+// (go-zpkg/bk#386, found on the first real use of the rebuild counter):
 //
 //	Install         -> fresh=false err=<nil>
 //	stat(v3.3.11_1) -> no such file or directory
@@ -2132,7 +2132,7 @@ func extractedPrefix(tmp string, r Resolved) (path string, aliased bool) {
 // verifyPulled enforces the fail-closed signature check on a pulled bottle.
 // EVERY path that brings bottle bytes onto the machine goes through it or
 // through httpDistUnverifiable — the install path used not to, so `pkgx` and
-// `pkgm` happily installed an unsigned bottle with PKGX_VERIFY=1 while only the
+// `pkgm` happily installed an unsigned bottle with ZPKG_VERIFY=1 while only the
 // mirror tooling checked. A guarantee enforced on one path out of two is not a
 // guarantee.
 //
@@ -2158,14 +2158,14 @@ func verifyPulledDigest(c *OCIClient, project, ver, osn, arch, digest string) er
 	return nil
 }
 
-// httpDistUnverifiable fails closed when verification is demanded but PKGX_DIST
+// httpDistUnverifiable fails closed when verification is demanded but ZPKG_DIST
 // speaks static HTTP, which carries no signatures at all (referrers are
 // OCI-only).
 func httpDistUnverifiable() error {
 	if !VerifyRequired() {
 		return nil
 	}
-	return fmt.Errorf("signature verification is on by default but PKGX_DIST=%s (HTTP) has no signatures; use an oci:// dist or set PKGX_VERIFY=0", DistBase)
+	return fmt.Errorf("signature verification is on by default but ZPKG_DIST=%s (HTTP) has no signatures; use an oci:// dist or set ZPKG_VERIFY=0", DistBase)
 }
 
 // fetchBottle returns the compressed bottle stream, trying .tar.gz then .tar.xz.
@@ -2298,7 +2298,7 @@ func aliasAdvances(dir, alias string, v Ver) bool {
 
 // ABIProvidesAnnotation lists the sonames a bottle's shared libraries call
 // themselves by, comma-separated and sorted. Written by bk at publish time.
-const ABIProvidesAnnotation = "org.go-pkgx.abi.provides"
+const ABIProvidesAnnotation = "org.go-zpkg.abi.provides"
 
 // abiAnnotations is a seam: the manifest read that answers what a bottle
 // provides.

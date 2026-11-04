@@ -138,10 +138,10 @@ func TestExtForLayerCoversZstd(t *testing.T) {
 // would brick every consumer, so the reader ships first and this is what says
 // it is ready.
 func TestZstdBottleRoundTripsThroughTheRegistry(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	base := fr.base("go-pkgx/bottles")
+	base := fr.base("go-zpkg/bottles")
 	c, err := NewOCIClient(base)
 	if err != nil {
 		t.Fatal(err)

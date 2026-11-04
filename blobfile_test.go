@@ -113,11 +113,11 @@ func TestFetchBlobFileRangeIgnoredMidTransfer(t *testing.T) {
 // bottle must not cost the bottle's size in heap. The in-memory Pull is the
 // control — it necessarily does.
 func TestPullFileDoesNotBufferTheBlob(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	const size = 24 << 20 // 24 MiB: big enough to dwarf the fixed overhead
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/packages"))
+	c, err := NewOCIClient(fr.base("go-zpkg/packages"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,7 +379,7 @@ func TestFetchBlobFileSeekFailures(t *testing.T) {
 func TestPullSurfacesFetchFailure(t *testing.T) {
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/packages"))
+	c, err := NewOCIClient(fr.base("go-zpkg/packages"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,10 +391,10 @@ func TestPullSurfacesFetchFailure(t *testing.T) {
 // TestPullReportsReadFailure: the in-memory wrapper reads the staged file back,
 // and that read can fail too.
 func TestPullReportsReadFailure(t *testing.T) {
-	t.Setenv("PKGX_VERIFY", "0")
+	t.Setenv("ZPKG_VERIFY", "0")
 	fr := newFakeRegistry(t, false)
 	defer fr.close()
-	c, err := NewOCIClient(fr.base("go-pkgx/packages"))
+	c, err := NewOCIClient(fr.base("go-zpkg/packages"))
 	if err != nil {
 		t.Fatal(err)
 	}

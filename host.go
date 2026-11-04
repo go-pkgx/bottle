@@ -1,7 +1,7 @@
 // Package bottle is the reusable pkgx "bottle backend": it resolves a package's
 // runtime dependency closure from the pkgx pantry, downloads the bottles from
-// the configured PKGX_DIST (default: the signed oci://ghcr.io/go-pkgx/packages
-// registry; PKGX_DIST=https://dist.pkgx.dev for the unsigned upstream), and
+// the configured ZPKG_DIST (default: the signed oci://ghcr.io/go-zpkg/packages
+// registry; ZPKG_DIST=https://dist.pkgx.dev for the unsigned upstream), and
 // installs them — with no runtime dependencies of its own (pure Go,
 // CGO_ENABLED=0, runnable on a `FROM scratch` image). It is imported by the
 // pkgm CLI and by sibling tools so there is one source of truth.

@@ -1,4 +1,4 @@
-// Copyright (c) 2026, the go-pkgx/bottle authors
+// Copyright (c) 2026, the go-zpkg/bottle authors
 // All rights reserved.
 //
 // SPDX-License-Identifier: BSD-3-Clause

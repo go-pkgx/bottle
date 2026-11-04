@@ -185,7 +185,7 @@ func TestTheUnsatisfiableMessageCannotCarryAnEscape(t *testing.T) {
 	}
 }
 
-// A REGISTRY IS A CONFIGURED ENDPOINT. PKGX_DIST and the mirror can both be
+// A REGISTRY IS A CONFIGURED ENDPOINT. ZPKG_DIST and the mirror can both be
 // pointed elsewhere, and a tag list is whatever the far side says. The old
 // test was on the FIRST BYTE only, so a tag beginning with a digit and
 // continuing into an escape sequence passed and went on to be printed in

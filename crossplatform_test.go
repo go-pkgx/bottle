@@ -40,7 +40,7 @@ func crossPantry(t *testing.T, recipes map[string]string, versions map[string][]
 		http.NotFound(w, r)
 	}))
 	// PantryOverlay too, and it is not decoration. It defaults to the LIVE
-	// go-pkgx/pantry-overlay, so a test that pinned only PantryBase was
+	// go-zpkg/pantry-overlay, so a test that pinned only PantryBase was
 	// reaching the network on every recipe it read — and passing because the
 	// real host answers 404 for an invented project. On wasm, where DNS fails
 	// with a connection reset rather than a 404, the same tests failed the
