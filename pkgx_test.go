@@ -418,12 +418,16 @@ func TestResolveClosureAndInstall(t *testing.T) {
 	if fresh, _ := Install(closure[0], dir); fresh {
 		t.Error("expected cached on second install")
 	}
-	// extracted layout + version symlink
-	if _, err := os.Stat(filepath.Join(dir, "acme.org/tool/v1.0.0/bin/tool")); err != nil {
+	// Extracted under the HASHED path, and NO version-only path beside it —
+	// not `v1.0.0`, not `v1`. Each of those names a version rather than a
+	// build, which is the thing the layout exists to make unsayable.
+	if _, err := os.Stat(filepath.Join(StorePrefix(dir, "acme.org/tool", ParseVer("1.0.0")), "bin", "tool")); err != nil {
 		t.Errorf("missing extracted bin: %v", err)
 	}
-	if _, err := os.Lstat(filepath.Join(dir, "acme.org/tool/v1")); err != nil {
-		t.Errorf("missing v1 symlink: %v", err)
+	for _, gone := range []string{"v1.0.0", "v1", "v*"} {
+		if _, err := os.Lstat(filepath.Join(dir, "acme.org/tool", gone)); err == nil {
+			t.Errorf("%s exists: a path that names a version and not a build", gone)
+		}
 	}
 	// ⛔ THE CLOSURE'S PATHS NAME THE HASHED BUILDS. LD_LIBRARY_PATH and a
 	// stub are written once and used for as long as the process lives;
@@ -472,8 +476,14 @@ func TestInstallBottleConcurrent(t *testing.T) {
 		}
 	}
 	// exactly one clean prefix, no leftover temp dirs
-	if _, err := os.Stat(filepath.Join(dir, "acme.org/tool/v1.0.0/bin/tool")); err != nil {
+	if _, err := os.Stat(filepath.Join(StorePrefix(dir, "acme.org/tool", ParseVer("1.0.0")), "bin", "tool")); err != nil {
 		t.Errorf("missing extracted bin after concurrent install: %v", err)
+	}
+	// ⛔ AND EXACTLY ONE. Several workers racing on one build must leave one
+	// directory, not one per worker: `dest` is the same hashed path for all
+	// of them, which is what makes the race benign.
+	if got := InstalledBuilds("acme.org/tool", dir); len(got) != 1 {
+		t.Errorf("InstalledBuilds = %v, want exactly one build", got)
 	}
 	tmps, _ := filepath.Glob(filepath.Join(dir, ".tmp-*"))
 	if len(tmps) != 0 {
@@ -941,7 +951,7 @@ func TestInstallForTargetPlatform(t *testing.T) {
 			t.Errorf("asked the HOST platform: %s", p)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, "tool.org", "v1.0.0", "bin", "tool")); err != nil {
+	if _, err := os.Stat(filepath.Join(StorePrefix(dir, "tool.org", ParseVer("1.0.0")), "bin", "tool")); err != nil {
 		t.Errorf("not extracted: %v", err)
 	}
 	// Install keeps meaning "the host": same fixture, and it must MISS.
@@ -1266,13 +1276,28 @@ func TestInstallForBottlePublishedUnderAnotherSpelling(t *testing.T) {
 	if _, err := InstallFor(r, dir, "linux", "x86-64"); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	// Installed under the name the bottle carries…
-	if st, err := os.Stat(filepath.Join(dir, "t.test", "v1.35", "bin", "t")); err != nil || st.IsDir() {
-		t.Errorf("payload not installed under its own name: %v", err)
+	// ⛔ INSTALLED UNDER THE RESOLVED VERSION, NOT THE ARCHIVE'S SPELLING.
+	// gnu.org/tar is published as `1.35` for linux and `1.35.0` for darwin,
+	// so the tarball's internal directory and the version a caller asked for
+	// can disagree. The install used to keep the bottle's own spelling as
+	// the real directory and link the canonical one to it — two paths, both
+	// naming a version.
+	//
+	// There is one path now, and it is the resolved version with the build's
+	// hash. The archive's internal spelling is not preserved, and for a
+	// bottle whose own rpaths name it that would matter — but a bottle built
+	// with a hashed prefix names the hashed prefix, and those are the only
+	// ones installed from here on.
+	p := StorePrefix(dir, "t.test", ParseVer("1.35.0"))
+	if !strings.Contains(filepath.Base(p), "v1.35.0"+variantSep) {
+		t.Fatalf("installed at %q, want the resolved version with a hash", p)
 	}
-	// …and reachable under the canonical spelling.
-	if _, err := os.Stat(filepath.Join(dir, "t.test", "v1.35.0", "bin", "t")); err != nil {
-		t.Errorf("canonical spelling does not resolve: %v", err)
+	if st, err := os.Stat(filepath.Join(p, "bin", "t")); err != nil || st.IsDir() {
+		t.Errorf("payload not installed: %v", err)
+	}
+	// And the archive's spelling is NOT left beside it as a second path.
+	if _, err := os.Lstat(filepath.Join(dir, "t.test", "v1.35")); err == nil {
+		t.Error("the archive's own spelling survives as a version-named path")
 	}
 }
 
