@@ -2099,7 +2099,7 @@ func InstallFor(r Resolved, pkgxDir, osn, arch string) (bool, error) {
 	if st, err := os.Stat(prefix); err == nil && st.IsDir() {
 		return false, nil // already present
 	}
-	body, ext, err := fetchBottle(r, osn, arch)
+	body, ext, digest, err := fetchBottle(r, osn, arch)
 	if err != nil {
 		return false, err
 	}
@@ -2133,16 +2133,45 @@ func InstallFor(r Resolved, pkgxDir, osn, arch string) (bool, error) {
 	//   rename /pkgx/.tmp-…/gnu.org/tar/v1.35.0 …: no such file or directory
 	// Install under the name the bottle carries — absolute paths baked inside it
 	// point there — and link the canonical spelling to it.
-	src, alias := extractedPrefix(tmp, r)
-	dest := filepath.Join(pkgxDir, r.Project, filepath.Base(src))
-	if moved, err := renameOrExplain(src, dest, prefix, r.Project, r.Version.Raw); err != nil || !moved {
+	// ⛔⛔ THE REAL DIRECTORY ALWAYS CARRIES THE HASH. `dest` used to be the
+	// name the BOTTLE carries, which is `v<version>` for almost every bottle
+	// — so almost every install landed in a directory that said nothing about
+	// WHICH build it was, and a second build of one version had nowhere to go.
+	//
+	// It is now `v<version>-h<hash>` without exception, and `v<version>`
+	// becomes a symlink to it. Readers that compute a path from (project,
+	// version) follow the symlink and need no change; what the symlink points
+	// at is which build is the store's default.
+	src, _ := extractedPrefix(tmp, r)
+	hash := StoreHash(r.Version, digest, DistBase+"\x00"+r.Project+"\x00"+r.Version.Raw+"\x00"+osn+"/"+arch)
+	if moved, err := renameOrExplain(src, pkgxDir, r.Project, r.Version, hash); err != nil || !moved {
 		return false, err
 	}
-	if alias {
-		_ = os.Remove(prefix)
-		_ = os.Symlink(filepath.Base(src), prefix)
+	// ⛔⛔ `v<version>` STAYS, AS A SYMLINK, AND IT IS NOT A CONVENIENCE —
+	// IT IS IN THE PUBLISHED BINARIES. Read out of a real published bottle,
+	// zlib.net 1.3.2 for darwin/aarch64:
+	//
+	//	otool -l …/libz.1.3.2.dylib
+	//	  name @rpath/zlib.net/v1.3.2/lib/libz.1.dylib
+	//
+	// Every binary that links zlib names that path. A store holding only
+	// `v1.3.2-h…` would break every one of them at load time, and the
+	// failure would be a dynamic-linker error far from here. So the real
+	// directory carries the hash and this link makes the published path
+	// resolve.
+	//
+	// ⛔ WHICH BUILD IT POINTS AT IS THE STORE'S DEFAULT, NOT A USER'S. On a
+	// shared NFS export that is a site-level fact, and a user who needs a
+	// different one does not rewrite it — they get a VIEW (LinkView), a tree
+	// of links of their own that their rpath finds first. A container or
+	// microVM built from an environment is the same mechanism: its links are
+	// COMPUTED INTO THE IMAGE at creation time from the shared store. An
+	// environment never consults the default at all, because it resolves to
+	// exact hashes when it is loaded.
+	if err := linkStoreAlias(pkgxDir, r.Project, r.Version, hash); err != nil {
+		return false, err
 	}
-	writeVersionLinks(pkgxDir, r)
+	writeVersionLinks(pkgxDir, r, hash)
 	writeABILinks(pkgxDir, r, osn, arch)
 	return true, nil
 }
@@ -2171,16 +2200,27 @@ func InstallFor(r Resolved, pkgxDir, osn, arch string) (bool, error) {
 // It does NOT create the alias here. That would serve the OLD content under
 // the new name, which is worse than failing: the caller asked for a rebuild
 // and would silently get the bottle it was meant to supersede.
-func renameOrExplain(src, dest, prefix, project, version string) (bool, error) {
+// ⛔⛔ THE AMBIGUITY THIS GUARDED IS GONE BY CONSTRUCTION, AND THE HASH IS WHY.
+// bk#386 happened because `dest` was the directory the BOTTLE carries —
+// `v3.3.11` for a rebuild published as `3.3.11_1` — so an occupied `dest`
+// could mean either "somebody installed this" or "somebody installed a
+// DIFFERENT build and yours is still missing". The only way to tell was to
+// ask about `prefix` separately, and that answer raced: a concurrent worker
+// between its rename and its alias has created `dest` and not yet `prefix`.
+//
+// `dest` is now `v<version>-h<hash>`, which is unique to THIS build. Occupied
+// can only mean this exact build is already there, which is precisely
+// "another worker got there first" — the thing the old code was trying to
+// infer. `prefix` is kept only to name in an error.
+// ⛔ IT COMPUTES `dest` ITSELF, so the mismatch cannot be constructed. The
+// old signature took `dest` from the caller, which is how it came to be the
+// ARCHIVE's directory; a helper that cannot be handed the wrong destination
+// has no wrong destination to detect.
+func renameOrExplain(src, dir, project string, v Ver, hash string) (bool, error) {
+	dest := StoreBuildPrefix(dir, project, v, hash)
 	if err := os.Rename(src, dest); err != nil {
 		if st, e := os.Stat(dest); e == nil && st.IsDir() {
-			if _, pe := os.Stat(prefix); pe == nil {
-				return false, nil // another worker got there first
-			}
-			return false, fmt.Errorf(
-				"%s %s was not installed: %s already holds other content and %s was requested — "+
-					"the bottle carries %s",
-				project, version, dest, prefix, filepath.Base(dest))
+			return false, nil // this build is already installed
 		}
 		return false, err
 	}
@@ -2271,11 +2311,23 @@ func httpDistUnverifiable() error {
 // fetchBottle returns the bottle body and the EXTENSION that names its
 // compression — a string rather than the old isXz bool, because there are now
 // three codecs and a boolean cannot say which.
-func fetchBottle(r Resolved, osn, arch string) (io.ReadCloser, string, error) {
+// It returns the bottle's content DIGEST alongside the stream, or "" when the
+// transport has none.
+//
+// ⛔ THE DIGEST WAS ALREADY COMPUTED AND THROWN AWAY. PullFile hashes the
+// bytes on the way past — that is what the signature is checked against — and
+// this function used to drop it at the return. It is the strongest witness of
+// WHICH build is being installed for a bottle whose tag carries no variant
+// hash, which is every bottle published so far, so the store path needs it.
+//
+// An HTTP dist has none: it serves a tarball and `httpDistUnverifiable`
+// already refuses that path unless verification is off. "" says so rather
+// than inventing one.
+func fetchBottle(r Resolved, osn, arch string) (io.ReadCloser, string, string, error) {
 	if IsOCI(DistBase) {
 		c, err := ociClientForDist()
 		if err != nil {
-			return nil, "", err
+			return nil, "", "", err
 		}
 		// The registry tag, which is the flavored one for a glibc-pinned build;
 		// the installed prefix stays v<version> either way.
@@ -2291,40 +2343,48 @@ func fetchBottle(r Resolved, osn, arch string) (io.ReadCloser, string, error) {
 		if cc := ociCacheClient(); cc != nil {
 			if f, ext, err := cc.PullFile(r.Project, tag, osn, arch); err == nil {
 				if err := verifyPulledDigest(c, r.Project, tag, osn, arch, f.Digest); err == nil {
-					return f, ext, nil
+					// ⛔ THE DIGEST THE REGISTRY ADVERTISES, NOT THE CACHE'S.
+					// verifyPulledDigest has just established they agree, so
+					// either value is the same string here — but the cache is
+					// "an optimisation and never an authority", and a path
+					// named from what a cache said would quietly become the
+					// exception to that the day the check is relaxed.
+					return f, ext, f.Digest, nil
 				}
 				f.Close()
 			}
 		}
 		f, ext, err := c.PullFile(r.Project, tag, osn, arch)
 		if err != nil {
-			return nil, "", err
+			return nil, "", "", err
 		}
 		if err := verifyPulledDigest(c, r.Project, tag, osn, arch, f.Digest); err != nil {
 			f.Close()
-			return nil, "", err
+			return nil, "", "", err
 		}
-		return f, ext, nil
+		return f, ext, f.Digest, nil
 	}
 	if err := httpDistUnverifiable(); err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	base := fmt.Sprintf("%s/%s/%s/%s/v%s", DistBase, r.Project, osn, arch, r.Version.Raw)
 	// Newest codec first: a dist that carries both serves the cheaper install.
 	for _, ext := range []string{ExtTarZst, ExtTarGz, ExtTarXz} {
 		resp, err := HTTPClient.Get(base + ext)
 		if err != nil {
-			return nil, "", err
+			return nil, "", "", err
 		}
 		if resp.StatusCode == 200 {
-			return resp.Body, ext, nil
+			// No digest: an HTTP dist serves bytes and advertises nothing to
+			// check them against. StoreHash falls back to the source.
+			return resp.Body, ext, "", nil
 		}
 		resp.Body.Close()
 		if resp.StatusCode != 404 {
-			return nil, "", fmt.Errorf("GET %s: %s", base+ext, resp.Status)
+			return nil, "", "", fmt.Errorf("GET %s: %s", base+ext, resp.Status)
 		}
 	}
-	return nil, "", fmt.Errorf("no bottle for %s v%s (%s/%s)", r.Project, r.Version.Raw, osn, arch)
+	return nil, "", "", fmt.Errorf("no bottle for %s v%s (%s/%s)", r.Project, r.Version.Raw, osn, arch)
 }
 
 // untar unpacks a bottle stream into dest. It delegates to the shared Extract
@@ -2348,9 +2408,15 @@ func untar(r io.Reader, dest string) error {
 // failure the ABI lines exist to end, arrived at from the other side. It was
 // always reachable — `pkgx +foo@1` after `+foo@2` did it — but a resolver that
 // installs two lines of one project on purpose makes it the ordinary case.
-func writeVersionLinks(pkgxDir string, r Resolved) {
+// ⛔⛔ THEY POINT AT THE HASHED DIRECTORY, NOT AT `v{full}`. `v{full}` is
+// itself a symlink now, and a chain of links is the smaller problem: for
+// version "1.2" the `v{maj}.{min}` alias IS `v1.2`, so targeting `v{full}`
+// wrote `v1.2 -> v1.2` — a self-symlink that replaced the real alias and
+// left the version unresolvable. Pointing every alias at the one real
+// directory removes the whole class.
+func writeVersionLinks(pkgxDir string, r Resolved, hash string) {
 	dir := filepath.Join(pkgxDir, r.Project)
-	full := "v" + r.Version.Raw
+	target := StoreBuildDirName(r.Version, hash)
 	n := r.Version.Nums
 	aliases := []string{"v*"}
 	if len(n) >= 1 {
@@ -2360,7 +2426,7 @@ func writeVersionLinks(pkgxDir string, r Resolved) {
 		aliases = append(aliases, "v"+strconv.Itoa(n[0])+"."+strconv.Itoa(n[1]))
 	}
 	for _, a := range aliases {
-		if a == full {
+		if a == target {
 			continue
 		}
 		p := filepath.Join(dir, a)
@@ -2368,7 +2434,7 @@ func writeVersionLinks(pkgxDir string, r Resolved) {
 			continue
 		}
 		_ = os.Remove(p)
-		_ = os.Symlink(full, p)
+		_ = os.Symlink(target, p)
 	}
 }
 

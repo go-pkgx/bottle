@@ -207,8 +207,16 @@ func TestStubBins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stub not written: %v", err)
 	}
-	real := filepath.Join(dir, "acme.org/tool", "v1.0.0", "bin", "tool")
-	if !strings.Contains(string(stub), "exec \""+real+"\"") ||
+	// ⛔ THE STUB NAMES THE HASHED DIRECTORY, NOT THE ALIAS. A stub is written
+	// once and run for as long as it is on a PATH; pointing it at
+	// `v1.0.0` would make it follow whatever that alias is made to mean
+	// later, so the binary a stub runs could change without the stub
+	// changing. It names the build it was written for.
+	real := StorePrefix(dir, "acme.org/tool", ParseVer("1.0.0"))
+	if !strings.Contains(real, variantSep) {
+		t.Fatalf("the installed prefix carries no hash: %s", real)
+	}
+	if !strings.Contains(string(stub), "exec \""+filepath.Join(real, "bin", "tool")+"\"") ||
 		!strings.Contains(string(stub), "LD_LIBRARY_PATH=") {
 		t.Errorf("stub content unexpected:\n%s", stub)
 	}
@@ -681,9 +689,13 @@ func TestResolveClosureBranches(t *testing.T) {
 	}
 }
 
+// ⛔⛔ VERSION "1.2" IS THE SELF-SYMLINK CASE, AND THE HASH IS WHAT ENDS IT.
+// The `v{maj}.{min}` alias for 1.2 IS `v1.2`, which used to be the real
+// directory — so writeVersionLinks had to SKIP it or write `v1.2 -> v1.2`.
+// Now the real directory is `v1.2-h<hash>` and every alias, `v1.2` included,
+// is an ordinary link to it. Nothing has to be skipped, and the case that
+// needed skipping cannot occur.
 func TestWriteVersionLinksAliasEqualsFull(t *testing.T) {
-	// Version "1.2": the v{maj}.{min} alias ("v1.2") equals the full prefix, so
-	// it must be skipped (no self-symlink).
 	defer fakeServer(t, map[string]fakePkg{
 		"al.org/tool": {versions: []string{"1.2"}, yaml: "provides:\n  - bin/tool\n", files: map[string]string{"bin/tool": "x"}},
 	})()
@@ -691,9 +703,20 @@ func TestWriteVersionLinksAliasEqualsFull(t *testing.T) {
 	if _, err := Install(Resolved{"al.org/tool", ParseVer("1.2")}, dir); err != nil {
 		t.Fatal(err)
 	}
+	// `v1.2` is a LINK now, and it must resolve — every dependent binary's
+	// rpath names it.
 	full := filepath.Join(dir, "al.org/tool", "v1.2")
-	if st, err := os.Lstat(full); err != nil || st.Mode()&os.ModeSymlink != 0 {
-		t.Errorf("v1.2 prefix should be the real dir, not a symlink (err=%v)", err)
+	st, err := os.Lstat(full)
+	if err != nil || st.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("v1.2 should be a symlink to the hashed build (err=%v)", err)
+	}
+	if _, err := os.Stat(filepath.Join(full, "bin", "tool")); err != nil {
+		t.Errorf("v1.2 does not resolve to the payload: %v", err)
+	}
+	// It must not point at itself, which is what the old skip existed for.
+	tgt, err := os.Readlink(full)
+	if err != nil || tgt == "v1.2" {
+		t.Errorf("v1.2 -> %q (err=%v): a self-symlink leaves the version unresolvable", tgt, err)
 	}
 	// the v1 alias is still a symlink.
 	if st, err := os.Lstat(filepath.Join(dir, "al.org/tool", "v1")); err != nil || st.Mode()&os.ModeSymlink == 0 {
@@ -847,7 +870,7 @@ func TestInstallOverOCIErrors(t *testing.T) {
 
 func TestFetchBottleOCIClientError(t *testing.T) {
 	withDist(t, "oci://hostonly")
-	if _, _, err := fetchBottle(Resolved{"a/b", ParseVer("1.0.0")}, "linux", "x86-64"); err == nil {
+	if _, _, _, err := fetchBottle(Resolved{"a/b", ParseVer("1.0.0")}, "linux", "x86-64"); err == nil {
 		t.Error("expected OCI client error in fetchBottle")
 	}
 }
@@ -855,7 +878,7 @@ func TestFetchBottleOCIClientError(t *testing.T) {
 func TestFetchBottleHTTPGetError(t *testing.T) {
 	t.Setenv("ZPKG_VERIFY", "0") // transport error path: an HTTP dist is unverifiable by design
 	withDist(t, "http://127.0.0.1:0")
-	if _, _, err := fetchBottle(Resolved{"a/b", ParseVer("1.0.0")}, "linux", "x86-64"); err == nil {
+	if _, _, _, err := fetchBottle(Resolved{"a/b", ParseVer("1.0.0")}, "linux", "x86-64"); err == nil {
 		t.Error("expected HTTP GET (dial) error in fetchBottle")
 	}
 }
