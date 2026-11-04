@@ -27,7 +27,32 @@ import (
 // specJSON is the wire form. Field names are short because an OCI annotation
 // value travels in every manifest fetch, and explicit because a Go field
 // rename must not silently change what published bottles mean.
+// SpecVersion is the payload's format version.
+//
+// ⛔⛔ A NUMBER, NOT A SCHEMA, AND IT BUYS ONE THING: A LEGIBLE FAILURE.
+// Without it, a payload written by a NEWER release is not rejected — it is
+// MISREAD. encoding/json drops fields it does not know, silently, so a v2
+// spec carrying a new identity-bearing field parses cleanly here as a v1
+// spec that happens to lack it.
+//
+// The bottle is not installed in that case, because VerifySpec recomputes
+// the hash and the dropped field moves it. So the outcome is already
+// fail-closed — but the message is "the bottle does not match its own
+// description", which reads as tampering and sends its reader to look for an
+// attacker. The truth is "this bottle was written by a release newer than
+// yours", and only a version field can say so.
+//
+// A JSON Schema would say more and cost more: this value travels in every
+// manifest fetch, and a schema is a URL to fetch and a document to keep in
+// step for a payload of five fields. The question a reader actually has is
+// "can I understand this?", and an integer answers it.
+const SpecVersion = 1
+
 type specJSON struct {
+	// ⛔ NOT `omitempty`. Every other field here is omitted when empty, so an
+	// empty spec is `{}`; if the version were omitted too, "written before
+	// versions existed" and "version 0" would be the same bytes.
+	V        int                 `json:"v"`
 	Platform string              `json:"platform,omitempty"`
 	Variants map[string][]string `json:"variants,omitempty"`
 	Deps     []depJSON           `json:"deps,omitempty"`
@@ -49,7 +74,7 @@ type depJSON struct {
 // coverage measurement keeps finding and a reader later mistakes for a real
 // case. TestMarshalSurvivesAwkwardBytes pins the property instead.
 func MarshalSpec(c Concrete) string {
-	j := specJSON{Platform: c.Platform, Recipe: c.Recipe, Graft: c.Graft}
+	j := specJSON{V: SpecVersion, Platform: c.Platform, Recipe: c.Recipe, Graft: c.Graft}
 	if len(c.Variants) > 0 {
 		j.Variants = map[string][]string{}
 		for n, v := range c.Variants {
@@ -74,6 +99,15 @@ func UnmarshalSpec(s string) (Concrete, error) {
 	var j specJSON
 	if err := json.Unmarshal([]byte(s), &j); err != nil {
 		return Concrete{}, fmt.Errorf("%s: %w", SpecAnnotation, err)
+	}
+	// ⛔ REFUSED BEFORE IT IS READ, and the message is the whole point. A
+	// newer payload parses cleanly — encoding/json drops what it does not
+	// know — so without this the caller gets a hash mismatch and goes
+	// looking for an attacker. Say which version it is instead.
+	if j.V > SpecVersion {
+		return Concrete{}, fmt.Errorf(
+			"%s is format version %d and this build understands %d: the bottle was published by a newer release of go-zpkg",
+			SpecAnnotation, j.V, SpecVersion)
 	}
 	c := Concrete{Platform: j.Platform, Recipe: j.Recipe, Graft: j.Graft}
 	if len(j.Variants) > 0 {
