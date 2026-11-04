@@ -71,12 +71,28 @@ var (
 	// everything upstream.
 	PantryOverlay = "https://raw.githubusercontent.com/go-zpkg/pantry-overlay/main/projects"
 
-	// UpstreamDist is the canonical pkgx distribution used to list versions for
-	// projects that are not (yet) published to an OCI DistBase — typically
-	// build-time deps such as llvm.org, perl.org or qt.io. It mirrors what
-	// `pkgx +<pkg>` installs, so a {{deps.<p>.prefix}} token resolves to the same
-	// version pkgx actually installs at build time. Overridable in tests.
-	UpstreamDist = "https://dist.pkgx.dev"
+	// UpstreamDist is a SECOND distribution consulted for the versions of a
+	// project our own DistBase does not carry. Empty means there is none, and
+	// that is the default.
+	//
+	// ⛔⛔ THE MECHANISM IS KEPT, THE VALUE IS NOT. This was
+	// `https://dist.pkgx.dev` — upstream pkgx's distribution — compiled in and
+	// always on, so every lookup our registry could not answer silently became
+	// a question asked of another project. That was right while this was a
+	// mirror with a gap-filler. It is wrong for a distribution: a project we
+	// do not carry should SAY SO, not resolve to somebody else's bottle.
+	//
+	// Measured 2026-11-04 on a one-in-forty sample of the 1907 recipes: of the
+	// bottles published and read, 0% were built here and 100% were mirrored,
+	// on darwin/aarch64 and linux/x86-64 alike, toolchain included. So the
+	// fallback is not a corner case today — which is exactly why it has to
+	// become a stated choice rather than a built-in assumption.
+	//
+	// Set ZPKG_UPSTREAM_DIST to point at one; "none" is the explicit off, as
+	// with ZPKG_PANTRY_OVERLAY. Our own factory sets it while the rebuild is
+	// in flight, which puts the dependency in a workflow where it can be read
+	// instead of in a constant where it cannot.
+	UpstreamDist = ""
 
 	// ImplicitRootsOff drops the implicit system-library roots from closure
 	// completion. See implicitRoots; set from ZPKG_IMPLICIT_ROOTS=none.
@@ -162,6 +178,11 @@ func applyEnv(get func(string) string) {
 	// "none" is how a caller says "no overlay": an empty value cannot mean it,
 	// because an unset variable and one set to nothing are the same string here,
 	// and defaulting on an unset variable is the whole point.
+	// A second distribution is opt-in: the default is that we are the only
+	// one. See UpstreamDist for why it stopped being compiled in.
+	if u := get("ZPKG_UPSTREAM_DIST"); u != "" {
+		UpstreamDist = strings.TrimRight(u, "/")
+	}
 	if p := get("ZPKG_PANTRY_OVERLAY"); p != "" {
 		if p == "none" {
 			PantryOverlay = ""
@@ -805,6 +826,9 @@ func versionsForSourced(project, osn, arch string) ([]Ver, bool, error) {
 			// back to the upstream dist rather than failing the whole recipe.
 			// Genuine transient/auth errors still propagate.
 			if repoAbsent(err) {
+				if !haveUpstream() {
+					return nil, false, notCarried(project, osn, arch)
+				}
 				up, err := httpVersionsFor(UpstreamDist, project, osn, arch)
 				// bothPlacesLooked here TOO. Two branches fall back to the
 				// upstream dist and only the one below said what its 404
@@ -825,11 +849,34 @@ func versionsForSourced(project, osn, arch string) ([]Ver, bool, error) {
 		if len(vs) > 0 {
 			return vs, true, nil
 		}
+		if !haveUpstream() {
+			return nil, false, notCarried(project, osn, arch)
+		}
 		up, err := httpVersionsFor(UpstreamDist, project, osn, arch)
 		return up, false, bothPlacesLooked(err, project, osn, arch)
 	}
 	vs, err := httpVersionsFor(DistBase, project, osn, arch)
 	return vs, false, err
+}
+
+// haveUpstream reports whether a second distribution is configured at all.
+//
+// "none" is the explicit off, spelled as ZPKG_PANTRY_OVERLAY spells it, so a
+// reader meeting one knows the other.
+func haveUpstream() bool {
+	return UpstreamDist != "" && UpstreamDist != "none"
+}
+
+// notCarried is the answer when THIS distribution does not carry a project
+// and there is no second one to ask.
+//
+// ⛔ IT MUST NOT SAY "NEITHER", which is what bothPlacesLooked says. Naming
+// two places when one was consulted is the same defect as a count that stops
+// at the answer: it reports a search that did not happen, and sends the
+// reader to check a second registry that was never configured.
+func notCarried(project, osn, arch string) error {
+	return fmt.Errorf("no %s for %s/%s: %s does not carry it, and no upstream is configured (set ZPKG_UPSTREAM_DIST)",
+		project, osn, arch, DistBase)
 }
 
 // bothPlacesLooked rewrites the upstream fallback's 404 to say what it means.
