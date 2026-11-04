@@ -100,6 +100,10 @@ func TestInstallingAnOlderLineCannotDemoteTheNewerOne(t *testing.T) {
 // what lets a shared NFS export stay read-only and lets a container compute
 // its own links at creation time.
 func TestADefaultIsAViewAndNotAStoreEntry(t *testing.T) {
+	// ⛔ A VIEW IS MADE OF SYMLINKS, AND WASI HAS NONE. Every other test in
+	// this file asserts the ABSENCE of links, which needs no symlink support
+	// — this one creates them, so it is the only one that has to skip.
+	skipOnWASI(t, wasiNoSymlink)
 	store := t.TempDir()
 	view := t.TempDir()
 	const proj = "a.org"
