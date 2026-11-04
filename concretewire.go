@@ -19,7 +19,10 @@ import (
 // a hash, and this annotation is what `pkgx ls` reads to print `+cuda ~mpi`.
 // That is the whole reason the `-glibc<X>` suffix could stop being a second
 // spelling of identity.
-const SpecAnnotation = "org.go-zpkg.spec"
+//
+// The key is declared in annotations.go and read through AnnotationPresent(),
+// which keeps "absent" distinguishable from "present and empty" — an empty
+// spec is a malformed bottle and a missing one is simply an older bottle.
 
 // specJSON is the wire form. Field names are short because an OCI annotation
 // value travels in every manifest fetch, and explicit because a Go field
@@ -128,7 +131,7 @@ func (c *OCIClient) SpecOf(project, tag, osn, arch string) (Concrete, bool, erro
 	if err != nil {
 		return Concrete{}, false, err
 	}
-	s, present := ann[SpecAnnotation]
+	s, present := AnnotationPresent(ann, SpecAnnotation)
 	if !present || s == "" {
 		return Concrete{}, false, nil
 	}

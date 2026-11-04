@@ -2394,7 +2394,7 @@ func aliasAdvances(dir, alias string, v Ver) bool {
 
 // ABIProvidesAnnotation lists the sonames a bottle's shared libraries call
 // themselves by, comma-separated and sorted. Written by bk at publish time.
-const ABIProvidesAnnotation = "org.go-zpkg.abi.provides"
+// Declared in annotations.go and read through Annotation().
 
 // abiAnnotations is a seam: the manifest read that answers what a bottle
 // provides.
@@ -2441,7 +2441,7 @@ var abiAnnotations = func(project, tag, osn, arch string) map[string]string {
 // reads the links comes later.
 func writeABILinks(pkgxDir string, r Resolved, osn, arch string) {
 	ann := abiAnnotations(r.Project, r.Version.tag(), osn, arch)
-	provides := ann[ABIProvidesAnnotation]
+	provides := Annotation(ann, ABIProvidesAnnotation)
 	if provides == "" {
 		return
 	}

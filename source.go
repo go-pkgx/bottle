@@ -33,16 +33,21 @@ const (
 	// what is stored is the upstream bytes exactly as they arrived, whatever
 	// they were compressed with, because changing a byte would change the digest
 	// that is the whole point.
-	MediaSourceLayer = "application/vnd.pkgx.source.layer.v1"
+	//
+	// ⛔ `vnd.go-zpkg.*`, not `vnd.pkgx.*`. Upstream pkgx defines no OCI
+	// artifacts at all — it serves plain tarballs from dist.pkgx.dev — so
+	// these names were minted by us inside a vendor namespace belonging to
+	// somebody who never agreed to them. See oci.go for the measurement and
+	// the read-compatibility rule.
+	MediaSourceLayer = "application/vnd.go-zpkg.source.layer.v1"
 	// ArtifactTypeSource marks a source manifest, so a registry listing can tell
 	// these from bottles.
-	ArtifactTypeSource = "application/vnd.pkgx.source"
-
-	// AnnotationSourceURI records where the bytes came from. It is provenance,
-	// not an address: two URLs can serve the same bytes and the digest is what
-	// identifies them.
-	AnnotationSourceURI = "dev.pkgx.source.uri"
+	ArtifactTypeSource = "application/vnd.go-zpkg.source"
 )
+
+// AnnotationSourceURI records where the bytes came from. It is provenance,
+// not an address: two URLs can serve the same bytes and the digest is what
+// identifies them. Declared in annotations.go, read through Annotation().
 
 // ErrSourceAbsent is returned by PullSource when the store has no such digest.
 var ErrSourceAbsent = errors.New("bottle: source not in the mirror")

@@ -156,7 +156,7 @@ var glibcMinKernelOf = func(ver, osn, arch string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return ann[GlibcMinKernelAnnotation], nil
+	return Annotation(ann, GlibcMinKernelAnnotation), nil
 }
 
 // Annotations returns the OCI annotations of a published bottle's per-platform

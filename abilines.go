@@ -101,7 +101,7 @@ func partitionConstraints(project string, constraints []string, osn, arch string
 func sonamesDisjoint(project string, vers []Ver, osn, arch string) error {
 	owner := map[string]string{}
 	for _, v := range vers {
-		list := abiAnnotations(project, v.tag(), osn, arch)[ABIProvidesAnnotation]
+		list := Annotation(abiAnnotations(project, v.tag(), osn, arch), ABIProvidesAnnotation)
 		var any bool
 		for _, s := range strings.Split(list, ",") {
 			s = strings.TrimSpace(s)
