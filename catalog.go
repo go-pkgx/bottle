@@ -569,7 +569,29 @@ func UnmarshalCatalog(b []byte) (Catalog, error) {
 // CatalogProjectName is the reserved project the catalogue is published
 // under. A project name rather than a special path, because that is what
 // makes it an ordinary bottle.
-const CatalogProjectName = "go-zpkg.github.io/catalog"
+//
+// ⛔⛔ THIS NAME ADDRESSES A PUBLISHED ARTEFACT, AND THE RENAME MOVED THE NAME
+// WITHOUT MOVING THE ARTEFACT. The go-pkgx → go-zpkg pass (#192) rewrote it
+// from `go-pkgx.dev/catalog` to `go-zpkg.github.io/catalog`. Nothing publishes
+// that, so every `zpkgs catalog update` on defaults has failed since, and a
+// FROM-scratch image built around the result has no catalogue in it at all:
+//
+//	zpkgs: catalog update: go-zpkg.github.io/catalog is not published in
+//	ghcr.io/go-pkgx/packages/go-zpkg.github.io/catalog … 403: denied
+//
+// Measured 2026-11-04 with ghcrprobe, anonymously, against a positive control
+// so that "absent" could not be the probe failing:
+//
+//	ghcr.io/go-pkgx/packages/gnu.org/bash                 PRESENT (control)
+//	ghcr.io/go-pkgx/packages/go-pkgx.dev/catalog          PRESENT
+//	ghcr.io/go-pkgx/packages/go-zpkg.github.io/catalog    ABSENT
+//	ghcr.io/go-pkgx/packages/go-pkgx.dev/catalog (as .github.io) ABSENT
+//
+// It is the SECOND constant this happened to — see DistBase in pkgx.go, where
+// the same pass pointed the whole fleet at an empty registry. The rule both
+// of them earned: a constant that addresses something published follows the
+// artefact, and moves only after a copy has run and been verified.
+const CatalogProjectName = "go-pkgx.dev/catalog"
 
 // CatalogVersion is the version it is published as. One moving tag rather
 // than a dated series: a catalogue is a cache of the registry, every reader
