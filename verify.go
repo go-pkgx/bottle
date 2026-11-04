@@ -15,7 +15,7 @@ import (
 // when installing. It is **on by default** (secure by default): only an explicit
 // ZPKG_VERIFY=0/false/no/off opts out. Anything else — unset, 1/true/yes/on, or
 // an unrecognised value — keeps verification on. The value is read through Env,
-// so it may come from a real environment variable or from ~/.pkgx/config.hcl2.
+// so it may come from a real environment variable or from ~/.zpkg/config.hcl2.
 func VerifyRequired() bool {
 	switch strings.ToLower(strings.TrimSpace(Env("ZPKG_VERIFY"))) {
 	case "0", "false", "no", "off":

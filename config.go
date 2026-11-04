@@ -1,6 +1,6 @@
 package bottle
 
-// config.go loads user defaults for the go-zpkg tools from ~/.pkgx/config.hcl2.
+// config.go loads user defaults for the go-zpkg tools from ~/.zpkg/config.hcl2.
 //
 // The file is an HCL2 top-level-attribute settings file: a flat list of
 // `NAME = <value>` attributes (no blocks), where <value> is a string, bool, or
@@ -29,12 +29,16 @@ var lookupEnv = os.LookupEnv
 
 // configPathFn resolves the config file path. It is a var so tests can point it
 // at a temporary file (or make it fail). It is deliberately based on the user
-// home directory — always ~/.pkgx/config.hcl2 — and NOT on ZPKG_DIR, both to
+// home directory — always ~/.zpkg/config.hcl2 — and NOT on ZPKG_DIR, both to
 // avoid a circular dependency (ZPKG_DIR is itself resolved through Env) and
 // because the location is a fixed, well-known settings path.
+//
+// ⛔ `.zpkg`, for the reason Dir() gives at length: upstream pkgx owns
+// ~/.pkgx and can be installed alongside us. A config file of ours in their
+// directory is a file they may reasonably delete.
 var configPathFn = func() (string, error) {
 	home, err := os.UserHomeDir()
-	return filepath.Join(home, ".pkgx", "config.hcl2"), err
+	return filepath.Join(home, ".zpkg", "config.hcl2"), err
 }
 
 var (
@@ -43,7 +47,7 @@ var (
 	configErr  error
 )
 
-// loadConfig reads and parses ~/.pkgx/config.hcl2 exactly once. It is tolerant:
+// loadConfig reads and parses ~/.zpkg/config.hcl2 exactly once. It is tolerant:
 // a missing file yields an empty map and no error; a path or parse failure
 // yields an empty map and a stored error (see ConfigError). Reads therefore
 // always fall back cleanly to environment variables / built-in defaults.
@@ -122,7 +126,7 @@ func ctyToString(v cty.Value) (string, error) {
 
 // Env resolves a variable for the go-zpkg tools. A real process environment
 // variable that is set AND non-empty wins; otherwise the value from
-// ~/.pkgx/config.hcl2 is returned; otherwise the empty string.
+// ~/.zpkg/config.hcl2 is returned; otherwise the empty string.
 func Env(name string) string {
 	if v, ok := lookupEnv(name); ok && v != "" {
 		return v
@@ -131,7 +135,7 @@ func Env(name string) string {
 	return configMap[name]
 }
 
-// ConfigError returns the error, if any, from loading ~/.pkgx/config.hcl2. It is
+// ConfigError returns the error, if any, from loading ~/.zpkg/config.hcl2. It is
 // nil when the file parsed cleanly or is simply absent, and non-nil only on a
 // real path or parse failure (in which case reads fall back to the environment).
 func ConfigError() error {

@@ -89,7 +89,7 @@ var sonameProject = map[string]string{
 	// pulling all of systemd (200+ binaries) just for libudev.so.1.
 	"libudev": "github.com/eudev-project/eudev",
 	// From the second sovereign generation, and each one CHECKED against an
-	// installed bottle rather than recalled: `ls ~/.pkgx/gnu.org/gettext/*/lib`
+	// installed bottle rather than recalled: `ls ~/.zpkg/gnu.org/gettext/*/lib`
 	// lists libtextstyle in five versions, and ncurses' ships libpanel and
 	// libpanelw beside libncurses. gnu.org/bison died on the first of them —
 	//   bison: error while loading shared libraries: libtextstyle.so.0

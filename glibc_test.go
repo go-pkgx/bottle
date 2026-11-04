@@ -15,7 +15,7 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
-// withGlibcEnv points Env at a fixed map (no ~/.pkgx/config.hcl2, no real
+// withGlibcEnv points Env at a fixed map (no ~/.zpkg/config.hcl2, no real
 // process environment) and clears the memoised glibc constraint.
 func withGlibcEnv(t *testing.T, m map[string]string) {
 	t.Helper()

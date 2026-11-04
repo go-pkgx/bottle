@@ -9,7 +9,11 @@ import (
 
 // StorePlatformFile is the name of the marker a store carries saying which
 // platform its bottles were built for.
-const StorePlatformFile = ".pkgx-platform"
+// ⛔ `.zpkg-platform`: this file is OURS, written by our installer into our
+// store, and upstream pkgx writes nothing of the kind. Named after upstream
+// it would claim a convention that is not theirs — and a store shared with
+// them is exactly what moving to ~/.zpkg stops.
+const StorePlatformFile = ".zpkg-platform"
 
 // MarkStorePlatform records, once, which platform a store holds.
 //
