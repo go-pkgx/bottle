@@ -425,13 +425,25 @@ func TestResolveClosureAndInstall(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(dir, "acme.org/tool/v1")); err != nil {
 		t.Errorf("missing v1 symlink: %v", err)
 	}
-	// closure lib path spans both packages
+	// ⛔ THE CLOSURE'S PATHS NAME THE HASHED BUILDS. LD_LIBRARY_PATH and a
+	// stub are written once and used for as long as the process lives;
+	// naming `v1.0.0` would make them follow whatever that alias is later
+	// made to mean. The alias is for the rpath baked into published binaries,
+	// which cannot be rewritten; everything computed HERE names the build.
 	lp := LibPath(closure, dir)
-	if !strings.Contains(lp, "acme.org/tool/v1.0.0/lib") || !strings.Contains(lp, "dep.org/lib/v2.3.0/lib") {
-		t.Errorf("libpath = %q", lp)
+	for _, p := range []string{
+		StorePrefix(dir, "acme.org/tool", ParseVer("1.0.0")),
+		StorePrefix(dir, "dep.org/lib", ParseVer("2.3.0")),
+	} {
+		if !strings.Contains(p, variantSep) {
+			t.Fatalf("installed prefix carries no hash: %s", p)
+		}
+		if !strings.Contains(lp, filepath.Join(p, "lib")) {
+			t.Errorf("libpath %q does not contain %q", lp, filepath.Join(p, "lib"))
+		}
 	}
 	// PrefixOf resolves an in-closure project, "" for an absent one.
-	if got := PrefixOf("dep.org/lib", closure, dir); got != filepath.Join(dir, "dep.org/lib", "v2.3.0") {
+	if got := PrefixOf("dep.org/lib", closure, dir); got != StorePrefix(dir, "dep.org/lib", ParseVer("2.3.0")) {
 		t.Errorf("PrefixOf in-closure = %q", got)
 	}
 	if got := PrefixOf("not/here", closure, dir); got != "" {
@@ -489,7 +501,7 @@ func TestFetchBottleServerError(t *testing.T) {
 	old := DistBase
 	DistBase = srv.URL
 	defer func() { DistBase = old }()
-	_, _, err := fetchBottle(Resolved{"a/b", ParseVer("1.0.0")}, "linux", "x86-64")
+	_, _, _, err := fetchBottle(Resolved{"a/b", ParseVer("1.0.0")}, "linux", "x86-64")
 	if err == nil {
 		t.Fatal("want error on 500")
 	}
@@ -1037,7 +1049,7 @@ func TestFetchBottleUsesCacheButTrustsTheRegistry(t *testing.T) {
 	r := Resolved{Project: "c.test", Version: ParseVer("1.0.0")}
 	read := func(what string) []byte {
 		t.Helper()
-		f, _, err := fetchBottle(r, "linux", "x86-64")
+		f, _, _, err := fetchBottle(r, "linux", "x86-64")
 		if err != nil {
 			t.Fatalf("%s: %v", what, err)
 		}
