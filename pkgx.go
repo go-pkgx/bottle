@@ -26,12 +26,32 @@ import (
 // runtime via $ZPKG_DIST / $ZPKG_PANTRY so a consumer can point pkgm/pkgx at a
 // local mirror produced by the `mirror` tool.
 //
-// DistBase defaults to the **signed** go-zpkg OCI registry so the default install
+// DistBase defaults to the **signed** OCI registry so the default install
 // path is verifiable end-to-end (pairs with VerifyRequired defaulting on). That
 // registry is a growing subset of the pantry; for the full upstream catalogue set
 // ZPKG_DIST=https://dist.pkgx.dev (unsigned → also set ZPKG_VERIFY=0).
+//
+// ⛔⛔ THE ORG IN THIS URL IS A DEPLOYMENT FACT, NOT OUR NAME, AND THE RENAME
+// GOT IT WRONG. The go-pkgx → go-zpkg pass rewrote it to
+// `ghcr.io/go-zpkg/packages`, which every release from v0.64.0 to v0.68.0
+// carries. Measured 2026-11-04 with ghcrprobe, anonymously, against a control:
+//
+//	ghcr.io/go-pkgx/packages/gnu.org/bash   PRESENT  (tag sha256-64caff4d…)
+//	ghcr.io/go-pkgx/packages/zlib.net       PRESENT  (tag sha256-21c9e221…)
+//	ghcr.io/go-zpkg/packages/gnu.org/bash   ABSENT
+//	ghcr.io/go-zpkg/packages/zlib.net       ABSENT
+//
+// GitHub's container packages are org-scoped and did NOT follow the repository
+// transfer: the repositories all moved, every bottle stayed. So those five
+// releases point the whole fleet at an empty registry, and `zpkgx` cannot
+// fetch anything with its defaults — which is what the `FROM scratch, offline`
+// check was reporting in go-zpkg/zpkgx#141 while I read it as a path problem.
+//
+// Renaming a URL did not move what it addresses. The bottles move by COPY,
+// and this line follows them — not the other way round. Until that copy has
+// run and been verified, this is where they are.
 var (
-	DistBase   = "oci://ghcr.io/go-zpkg/packages"
+	DistBase   = "oci://ghcr.io/go-pkgx/packages"
 	PantryBase = "https://raw.githubusercontent.com/pkgxdev/pantry/main/projects"
 
 	// PantryOverlay is MERGED OVER PantryBase for a project's package.yml: a
