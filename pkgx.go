@@ -341,14 +341,35 @@ func recipeDoc(project string) (map[string]any, error) {
 	return nil, fmt.Errorf("no recipe for %s in %s or %s", project, PantryOverlay, PantryBase)
 }
 
-// Dir resolves the bottle store (ZPKG_DIR, default ~/.pkgx), expanding the
+// Dir resolves the bottle store (ZPKG_DIR, default ~/.zpkg), expanding the
 // platform placeholders described by [ExpandStorePath].
+//
+// ⛔⛔ `~/.zpkg`, AND IT IS UPSTREAM'S DIRECTORY WE ARE GETTING OUT OF. pkgx
+// documents its own store as `~/.pkgx/<project>/v<version>/` — upstream's own
+// corpus, read 2026-11-04 — and upstream's `pkgx` can now sit on the same
+// PATH as ours, which is the entire reason the binaries were renamed. Two
+// implementations writing one directory, under two different layouts (ours
+// carries a variant hash; see storepath.go), is the collision the rename
+// existed to remove, left in the one place it does the most damage.
+//
+// It is also what every command PRINTS. The landing page's transcripts said
+//
+//	1965 project(s) → ~/.pkgx/catalog/linux-x86-64.json
+//
+// after the rename, and the page was right — that is what the code returned.
+// A product that answers with somebody else's directory has not been renamed,
+// it has been relabelled.
+//
+// ⛔ NOTHING IS MIGRATED, ON PURPOSE. An existing `~/.pkgx` is pkgx's as much
+// as ours and we cannot tell which bottles in it are whose; moving it would
+// be taking somebody else's files. A user who wants the old store keeps it
+// with ZPKG_DIR=~/.pkgx, which is one line and says what it means.
 func Dir() string {
 	if d := Env("ZPKG_DIR"); d != "" {
 		return ExpandStorePath(d)
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".pkgx")
+	return filepath.Join(home, ".zpkg")
 }
 
 // storePlaceholders are the names [ExpandStorePath] knows.

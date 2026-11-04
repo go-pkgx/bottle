@@ -513,8 +513,13 @@ func TestDirDefault(t *testing.T) {
 	setConfigPath(t, filepath.Join(t.TempDir(), "absent.hcl2"))
 	t.Setenv("ZPKG_DIR", "")
 	t.Setenv("HOME", "/tmp/homeX")
-	if got := Dir(); got != "/tmp/homeX/.pkgx" {
-		t.Errorf("default Dir = %q", got)
+	// ⛔ `.zpkg`, AND THE NAME IS THE ASSERTION. `~/.pkgx` is upstream pkgx's
+	// store — its own documentation says so — and upstream can sit on the
+	// same PATH as us since the rename. Two implementations writing one
+	// directory under two layouts is the collision the rename removed; this
+	// test is what keeps it removed.
+	if got := Dir(); got != "/tmp/homeX/.zpkg" {
+		t.Errorf("default Dir = %q, want the store to be OURS", got)
 	}
 	t.Setenv("ZPKG_DIR", "/custom")
 	if got := Dir(); got != "/custom" {
