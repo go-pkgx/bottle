@@ -44,7 +44,7 @@ jobs:
         # One job per target rather than a loop, so a finding in one does
         # not hide the others behind an early exit — and so the job NAME
         # says which parser gave way.
-        target: [FuzzUnmarshalCatalog, FuzzParseLock, FuzzDisplayText]
+        target: [FuzzUnmarshalCatalog, FuzzParseLock, FuzzDisplayText, FuzzParseSigners]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

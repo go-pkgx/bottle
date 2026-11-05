@@ -28,6 +28,11 @@ func VerifyRequired() bool {
 // bottle carries a cosign-style signature referrer whose signature verifies
 // against this key; verification is fail-closed. It is a var (not const) only so
 // tests can substitute a throwaway key.
+//
+// ⛔ IT IS THE DEFAULT TRUST SET, NOT THE WHOLE OF IT. What a client will
+// accept is a TrustSet — this key unless the operator says otherwise, plus
+// whatever ZPKG_EXTRA_TRUSTED_KEYS adds, and a threshold over the lot. See
+// trust.go; everything that verifies a bottle goes through LoadTrustSet.
 var SigningPublicKey = "RWQ+rmH+fXy2iYr+gReQAOQtYWtH0A7UlxcAa2hpr+txNBwGqtpFsR6L"
 
 // Signature referrer conventions.
@@ -39,6 +44,20 @@ const (
 	// CosignSignatureAnnotation carries the base64 signature on the referrer
 	// manifest (cosign's convention).
 	CosignSignatureAnnotation = "dev.cosignproject.cosign/signature"
+	// SignerKeyIDAnnotation names, in hex, the minisign key id that made the
+	// signature on this referrer.
+	//
+	// ⛔ IT IS A HINT AND MUST NEVER BE TRUSTED. A cosign blob signature is a
+	// bare Ed25519 signature: it does not say which key made it, so with two
+	// signers a verifier would have to try every trusted key against every
+	// signature. This annotation turns that product back into a walk — and
+	// nothing more. Verify tries the hinted key FIRST and then the others, so
+	// an annotation that lies costs time and changes no verdict.
+	//
+	// There is deliberately no annotation for the signer's NAME. A name on the
+	// artefact is written by whoever pushed it; the name a user reads comes
+	// from their own trust set, which is the only place it means anything.
+	SignerKeyIDAnnotation = "org.go-zpkg.signer.keyid"
 
 	// GlibcVersionAnnotation and GlibcMinKernelAnnotation describe a
 	// glibc-flavored bottle on its per-platform manifest: the exact glibc it
@@ -75,6 +94,14 @@ func VerifySignatureDigest(digest string, payload []byte, b64sig, pubkey string)
 	if err := sign.VerifyBlob(payload, b64sig, pub); err != nil {
 		return err
 	}
+	return payloadCommitsTo(payload, digest)
+}
+
+// payloadCommitsTo checks that a simple-signing payload names this exact
+// bottle. A valid signature over SOMEBODY ELSE'S payload is the whole attack
+// this prevents, so it is kept apart from the key check and both are run on
+// every path — TrustSet.Verify reuses it.
+func payloadCommitsTo(payload []byte, digest string) error {
 	var p struct {
 		Critical struct {
 			Image struct {

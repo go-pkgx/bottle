@@ -533,10 +533,10 @@ func (c *OCIClient) resolvePlatform(ctx context.Context, repo *remote.Repository
 	return manDesc, man, nil
 }
 
-// VerifyBottle checks the cosign-style signature attached to a pulled bottle as
-// an OCI referrer, against the pinned SigningPublicKey. It is fail-closed: a
-// missing signature referrer, a malformed one, or a signature that does not
-// verify (or does not commit to this tarball) all return an error.
+// VerifyBottle checks the cosign-style signatures attached to a pulled bottle as
+// OCI referrers against the configured trust set. It is fail-closed: no
+// signature referrer, malformed ones, or too few that verify (or that do not
+// commit to this tarball) all return an error.
 func (c *OCIClient) VerifyBottle(project, ver, osn, arch string, tarball []byte) error {
 	sum := sha256.Sum256(tarball)
 	return c.VerifyBottleDigest(project, ver, osn, arch, "sha256:"+hex.EncodeToString(sum[:]))
@@ -546,49 +546,120 @@ func (c *OCIClient) VerifyBottle(project, ver, osn, arch string, tarball []byte)
 // form an install uses, having streamed the tarball to disk and hashed it on
 // the way past.
 func (c *OCIClient) VerifyBottleDigest(project, ver, osn, arch, digest string) error {
+	rep, err := c.SignaturesOfDigest(project, ver, osn, arch, digest)
+	if err != nil {
+		return err
+	}
+	if verr := rep.Err(); verr != nil {
+		return fmt.Errorf("bottle: %s v%s (%s/%s): %w", project, ver, osn, arch, verr)
+	}
+	return nil
+}
+
+// SignaturesOfDigest reports who signed a bottle. Its error is reserved for
+// not being able to ASK — a registry that would not answer, or a subject
+// carrying more signatures than this will look at. The verdict is the
+// report's: see SignatureReport.Err.
+//
+// ⛔⛔ EVERY SIGNATURE REFERRER IS COLLECTED, NOT THE FIRST ONE. Taking the
+// first was a defect the moment a second signer existed, and a quiet one: the
+// registry decides the order of a referrers listing, so the same bottle would
+// verify or fail depending on which signature it happened to serve first, and
+// the failure would read as tampering. It also made the threshold
+// unimplementable — "both builders signed this" and "one did" were the same
+// answer.
+func (c *OCIClient) SignaturesOfDigest(project, ver, osn, arch, digest string) (SignatureReport, error) {
+	trust, err := LoadTrustSet()
+	if err != nil {
+		return SignatureReport{}, err
+	}
 	ctx := context.Background()
 	repo, err := c.repository(project)
 	if err != nil {
-		return err
+		return SignatureReport{}, err
 	}
 	desc, _, err := c.resolvePlatform(ctx, repo, project, ver, osn, arch)
 	if err != nil {
-		return err
+		return SignatureReport{}, err
 	}
-	refs, err := c.Referrers(project, desc)
+	atts, malformed, err := c.attestations(ctx, repo, project, desc)
 	if err != nil {
-		return err
+		return SignatureReport{}, err
 	}
-	var sig *ocispec.Descriptor
+	names, untrusted, err := trust.Count(digest, atts)
+	if err != nil {
+		return SignatureReport{}, fmt.Errorf("bottle: %s v%s (%s/%s): %w", project, ver, osn, arch, err)
+	}
+	return SignatureReport{Signers: names, Untrusted: untrusted, Malformed: malformed, Threshold: trust.Threshold}, nil
+}
+
+// SignaturesOfTag reports who signed the bottle published under one tag,
+// WITHOUT downloading the tarball: the digest the signature commits to is the
+// per-platform manifest's layer digest, which the manifest already carries.
+//
+// It is what a listing uses — "who vouches for this build?" is a question you
+// must be able to ask about a build you have not installed.
+func (c *OCIClient) SignaturesOfTag(project, tag, osn, arch string) (SignatureReport, error) {
+	ctx := context.Background()
+	repo, err := c.repository(project)
+	if err != nil {
+		return SignatureReport{}, err
+	}
+	_, man, err := c.resolvePlatform(ctx, repo, project, tag, osn, arch)
+	if err != nil {
+		return SignatureReport{}, err
+	}
+	if len(man.Layers) == 0 {
+		return SignatureReport{}, fmt.Errorf("bottle: %s %s (%s/%s) has no layer to have signed", project, tag, osn, arch)
+	}
+	return c.SignaturesOfDigest(project, tag, osn, arch, man.Layers[0].Digest.String())
+}
+
+// attestations fetches every signature referrer on a subject and returns the
+// candidate signatures, plus how many referrers were signature-typed but
+// unusable.
+//
+// ⛔ THE MALFORMED ONES ARE COUNTED, NOT DROPPED. A skip that says nothing is
+// a filter: "unsigned" and "signed, but the referrer is broken" are different
+// facts and the second one names a publishing bug. The count rides along so
+// the verdict can say which.
+func (c *OCIClient) attestations(ctx context.Context, repo *remote.Repository, project string, subject ocispec.Descriptor) ([]Attestation, int, error) {
+	refs, err := c.Referrers(project, subject)
+	if err != nil {
+		return nil, 0, err
+	}
+	var atts []Attestation
+	malformed := 0
 	for i := range refs {
-		if refs[i].ArtifactType == ArtifactTypeSignature {
-			sig = &refs[i]
-			break
+		if refs[i].ArtifactType != ArtifactTypeSignature {
+			continue
 		}
+		if len(atts)+malformed >= MaxSignatures {
+			return nil, 0, fmt.Errorf("bottle: more than %d signature referrers on %s: refusing", MaxSignatures, project)
+		}
+		manBytes, err := orascontent.FetchAll(ctx, repo, refs[i])
+		if err != nil {
+			return nil, 0, err
+		}
+		// The referrer manifest is digest-verified content the listing has
+		// already parsed, so a decode failure here is a malformed referrer
+		// just like a missing annotation or layer — fold them.
+		var man ocispec.Manifest
+		b64 := ""
+		if json.Unmarshal(manBytes, &man) == nil {
+			b64 = man.Annotations[CosignSignatureAnnotation]
+		}
+		if b64 == "" || len(man.Layers) == 0 {
+			malformed++
+			continue
+		}
+		payload, err := orascontent.FetchAll(ctx, repo, man.Layers[0])
+		if err != nil {
+			return nil, 0, err
+		}
+		atts = append(atts, Attestation{Payload: payload, Sig: b64, KeyID: man.Annotations[SignerKeyIDAnnotation]})
 	}
-	if sig == nil {
-		return fmt.Errorf("bottle: %s v%s (%s/%s) is unsigned (no signature referrer)", project, ver, osn, arch)
-	}
-	manBytes, err := orascontent.FetchAll(ctx, repo, *sig)
-	if err != nil {
-		return err
-	}
-	// The signature referrer manifest is digest-verified content that the
-	// referrers listing already parsed, so a decode failure here would be a
-	// malformed referrer just like a missing annotation or layer — fold them.
-	var man ocispec.Manifest
-	b64 := ""
-	if json.Unmarshal(manBytes, &man) == nil {
-		b64 = man.Annotations[CosignSignatureAnnotation]
-	}
-	if b64 == "" || len(man.Layers) == 0 {
-		return errors.New("bottle: malformed signature referrer")
-	}
-	payload, err := orascontent.FetchAll(ctx, repo, man.Layers[0])
-	if err != nil {
-		return err
-	}
-	return VerifySignatureDigest(digest, payload, b64, "")
+	return atts, malformed, nil
 }
 
 // isIndexMedia reports whether a manifest is an image index, by descriptor

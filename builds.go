@@ -42,6 +42,15 @@ type Build struct {
 	// bottle has no recoverable build date — the timestamp is pinned so a
 	// re-publish is byte-identical. This is when you got it. See BuildOrder.
 	InstalledAt time.Time
+	// Signatures is who vouches for this build, or nil when the registry was
+	// not asked or would not answer.
+	//
+	// ⛔ NIL IS "NOT ASKED", NOT "NOBODY". The two must stay distinguishable
+	// all the way to the screen: a column that printed an empty cell for
+	// both would turn a network failure into the claim that a build is
+	// unsigned, which is how a user ends up rebuilding something that was
+	// fine — or trusting something that was not.
+	Signatures *SignatureReport
 }
 
 // Hash is the build's address — the short form that appears in its tag and
@@ -102,9 +111,11 @@ func BuildsOf(project, version, dir, osn, arch string) ([]Build, error) {
 // says "nothing recorded" for the rows it could not describe, which is true
 // whether the bottle predates identities or its manifest was unreadable.
 //
-// ⛔ AND IT IS ONE FETCH PER BUILD, NOT PER VERSION. That is the cost of the
-// question: a list of two builds costs two manifests. A caller that cannot
-// pay it should not be asking which builds exist.
+// ⛔ AND IT IS A FEW FETCHES PER BUILD, NOT PER VERSION. That is the cost of
+// the question: each build costs its manifest, its referrers listing and one
+// blob per signature. A caller that cannot pay it should not be asking which
+// builds exist. It stays bounded — a version has a handful of builds, not a
+// catalogue's worth.
 func describeBuilds(builds []Build, project, osn, arch string) {
 	var c *OCIClient
 	for i := range builds {
@@ -126,6 +137,12 @@ func describeBuilds(builds []Build, project, osn, arch string) {
 		}
 		if spec, ok, err := c.SpecOf(project, tag, osn, arch); err == nil && ok {
 			builds[i].Spec = spec
+		}
+		// Left nil on any error, which says "not asked" rather than
+		// "nobody signed it". A report that came back short of the
+		// threshold is still an ANSWER and is kept.
+		if rep, err := c.SignaturesOfTag(project, tag, osn, arch); err == nil {
+			builds[i].Signatures = &rep
 		}
 	}
 }
