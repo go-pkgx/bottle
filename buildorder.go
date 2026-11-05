@@ -48,10 +48,25 @@ const (
 	// when you got the build, not when it was built, and the two are
 	// unrelated: pulling a two-year-old bottle today puts it first.
 	ByInstalled BuildOrder = "installed"
+	// ByClosure is the order a reader actually means by "newer": a build made
+	// against a later toolchain comes first.
+	//
+	// ⛔⛔ IT IS THE ONE ORDER THE BOTTLES THEMSELVES CARRY. There is no build
+	// date (see above), but the closure IS recorded — so "built with go.dev
+	// 1.27.4" against "built with go.dev 1.27.3" is a comparison of two facts
+	// rather than an inference, and it is exactly the comparison a CVE
+	// rebuild creates.
+	//
+	// ⛔ AND IT IS A PARTIAL ORDER, HONESTLY TOTALISED. See closureRank: one
+	// build is later than another only when it is at least as new on EVERY
+	// shared dependency and strictly newer on one. Two builds that each lead
+	// on a different dependency are genuinely incomparable, and saying
+	// otherwise would be the invented order this codebase keeps refusing.
+	ByClosure BuildOrder = "closure"
 )
 
 // BuildOrders lists the keys, for a flag's help and for validating one.
-var BuildOrders = []BuildOrder{ByStatus, ByHash, ByInstalled}
+var BuildOrders = []BuildOrder{ByStatus, ByClosure, ByHash, ByInstalled}
 
 // ParseBuildOrder reads a sort key, naming the alternatives when it cannot.
 func ParseBuildOrder(s string) (BuildOrder, error) {
@@ -74,9 +89,24 @@ func ParseBuildOrder(s string) (BuildOrder, error) {
 // command would print a different list twice and a reader would stop
 // believing either.
 func SortBuilds(project string, builds []Build, by BuildOrder) []Build {
+	// ⛔⛔ THE RANK IS COMPUTED ONCE, OUTSIDE THE COMPARATOR, AND THAT IS NOT
+	// an optimisation. Dominance is a PARTIAL order, and a partial order used
+	// directly as a `less` function is not a strict weak ordering: sort.Slice
+	// may then produce a nonsensical permutation or panic, depending on the
+	// input. Counting how many builds dominate each one turns it into a total
+	// order over integers, which sort can be trusted with — and which is also
+	// explainable to a reader: rank 0 is "nothing here is later than this".
+	rank := map[string]int{}
+	if by == ByClosure {
+		rank = closureRank(builds)
+	}
 	sort.SliceStable(builds, func(i, j int) bool {
 		a, b := builds[i], builds[j]
 		switch by {
+		case ByClosure:
+			if ra, rb := rank[a.Hash()], rank[b.Hash()]; ra != rb {
+				return ra < rb
+			}
 		case ByInstalled:
 			if a.InstalledAt != b.InstalledAt {
 				// Not installed sorts last, whatever the zero time would do.
@@ -97,6 +127,65 @@ func SortBuilds(project string, builds []Build, by BuildOrder) []Build {
 		return a.Hash() < b.Hash()
 	})
 	return builds
+}
+
+// closureRank counts, for each build, how many of the others are strictly
+// LATER than it. Rank 0 means nothing listed here supersedes it.
+//
+// ⛔ A COUNT RATHER THAN A CHAIN, because dominance is partial: with three
+// builds where A beats B, and C is incomparable with both, there is no chain
+// to walk. The count orders what can be ordered and leaves the rest tied, and
+// a tie falls back to the hash so the output is still stable.
+func closureRank(builds []Build) map[string]int {
+	rank := make(map[string]int, len(builds))
+	for _, a := range builds {
+		n := 0
+		for _, b := range builds {
+			if a.Hash() == b.Hash() {
+				continue
+			}
+			if closureIsLater(b.Spec, a.Spec) {
+				n++
+			}
+		}
+		rank[a.Hash()] = n
+	}
+	return rank
+}
+
+// closureIsLater reports whether a was built against a strictly later closure
+// than b: at least as new on every dependency they share, and newer on one.
+//
+// ⛔ ONLY THE SHARED DEPENDENCIES ARE COMPARED. A build that gained a
+// dependency the other does not have is a different SHAPE, not a later
+// version of it — treating an extra edge as "newer" would say the CUDA build
+// supersedes the plain one, which is a statement about taste and not about
+// time.
+//
+// ⛔ AND A SPEC THAT RECORDS NOTHING IS NEVER LATER AND NEVER EARLIER. Every
+// bottle published before identities existed is one of those; ranking them
+// against a described build would be comparing a fact with a blank.
+func closureIsLater(a, b Concrete) bool {
+	if a.IsZero() || b.IsZero() {
+		return false
+	}
+	shared := 0
+	better := false
+	for _, da := range a.Deps {
+		for _, db := range b.Deps {
+			if da.Project != db.Project {
+				continue
+			}
+			shared++
+			switch cmpVer(ParseVer(da.Version), ParseVer(db.Version)) {
+			case -1:
+				return false // older on this one: not later overall
+			case 1:
+				better = true
+			}
+		}
+	}
+	return shared > 0 && better
 }
 
 func isWithdrawn(project string, b Build) bool {
