@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Listing the builds of a version, and naming one.
@@ -34,6 +35,13 @@ type Build struct {
 	// them hand the reader the problem the command was asked to solve; see
 	// Distinguish.
 	Spec Concrete
+	// InstalledAt is when this build's directory appeared in THIS store, or
+	// the zero time when it is not installed.
+	//
+	// ⛔ IT IS NOT A BUILD DATE AND MUST NOT BE SHOWN AS ONE. A published
+	// bottle has no recoverable build date — the timestamp is pinned so a
+	// re-publish is byte-identical. This is when you got it. See BuildOrder.
+	InstalledAt time.Time
 }
 
 // Hash is the build's address — the short form that appears in its tag and
@@ -62,7 +70,8 @@ func BuildsOf(project, version, dir, osn, arch string) ([]Build, error) {
 		if v.Raw != version {
 			continue
 		}
-		b := &Build{Version: v, Installed: StoreBuildPrefix(dir, project, v, v.Variant)}
+		p := StoreBuildPrefix(dir, project, v, v.Variant)
+		b := &Build{Version: v, Installed: p, InstalledAt: installedAt(p)}
 		byHash[v.Variant] = b
 		order = append(order, v.Variant)
 	}
