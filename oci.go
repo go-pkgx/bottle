@@ -600,19 +600,98 @@ func (c *OCIClient) SignaturesOfDigest(project, ver, osn, arch, digest string) (
 // It is what a listing uses — "who vouches for this build?" is a question you
 // must be able to ask about a build you have not installed.
 func (c *OCIClient) SignaturesOfTag(project, tag, osn, arch string) (SignatureReport, error) {
+	rep, _, err := c.ProvenanceOfTag(project, tag, osn, arch)
+	return rep, err
+}
+
+// ProvenanceOfTag answers both halves of "can I trust this build?" in ONE
+// pass over the bottle's attestations: who signed it, and what built it.
+//
+// ⛔⛔ THE TWO ARE ONE QUESTION AND MUST COST ONE LISTING. A signature says
+// these bytes are somebody's; it says nothing about what produced them. The
+// builder — `https://github.com/go-zpkg/zbk@v0.64.0`, recorded by the factory
+// in the in-toto statement's runDetails.builder.id — is the other half, and
+// it is NOT in the build's identity: a zbk release must not re-address every
+// bottle in the registry. So the only way to learn it is to read the
+// attestation, and a caller that had to ask twice would pay two referrer
+// listings for one screenful.
+//
+// The builder is "" when the bottle carries no provenance, or one this cannot
+// parse. Empty means NOT RECORDED, never "built by nobody", and a caller that
+// prints it must keep that distinction — the registry is still full of
+// bottles published before any of this existed.
+func (c *OCIClient) ProvenanceOfTag(project, tag, osn, arch string) (SignatureReport, string, error) {
+	trust, err := LoadTrustSet()
+	if err != nil {
+		return SignatureReport{}, "", err
+	}
 	ctx := context.Background()
 	repo, err := c.repository(project)
 	if err != nil {
-		return SignatureReport{}, err
+		return SignatureReport{}, "", err
 	}
-	_, man, err := c.resolvePlatform(ctx, repo, project, tag, osn, arch)
+	desc, man, err := c.resolvePlatform(ctx, repo, project, tag, osn, arch)
 	if err != nil {
-		return SignatureReport{}, err
+		return SignatureReport{}, "", err
 	}
 	if len(man.Layers) == 0 {
-		return SignatureReport{}, fmt.Errorf("bottle: %s %s (%s/%s) has no layer to have signed", project, tag, osn, arch)
+		return SignatureReport{}, "", fmt.Errorf("bottle: %s %s (%s/%s) has no layer to have signed", project, tag, osn, arch)
 	}
-	return c.SignaturesOfDigest(project, tag, osn, arch, man.Layers[0].Digest.String())
+	refs, err := c.Referrers(project, desc)
+	if err != nil {
+		return SignatureReport{}, "", err
+	}
+	atts, malformed, err := c.signatureAttestations(ctx, repo, project, refs)
+	if err != nil {
+		return SignatureReport{}, "", err
+	}
+	names, untrusted, err := trust.Count(man.Layers[0].Digest.String(), atts)
+	if err != nil {
+		return SignatureReport{}, "", fmt.Errorf("bottle: %s %s (%s/%s): %w", project, tag, osn, arch, err)
+	}
+	rep := SignatureReport{Signers: names, Untrusted: untrusted, Malformed: malformed, Threshold: trust.Threshold}
+	return rep, c.builderFrom(ctx, repo, refs), nil
+}
+
+// builderFrom reads runDetails.builder.id out of the in-toto provenance.
+//
+// Every failure is "" — unreachable, unparseable and absent are all "nothing
+// here says what built it", and a listing that refused to print because one
+// attestation would not parse would trade a complete answer for none.
+func (c *OCIClient) builderFrom(ctx context.Context, repo *remote.Repository, refs []ocispec.Descriptor) string {
+	for i := range refs {
+		if refs[i].ArtifactType != ArtifactTypeProvenance {
+			continue
+		}
+		manBytes, err := orascontent.FetchAll(ctx, repo, refs[i])
+		if err != nil {
+			continue
+		}
+		var m ocispec.Manifest
+		if json.Unmarshal(manBytes, &m) != nil || len(m.Layers) == 0 {
+			continue
+		}
+		blob, err := orascontent.FetchAll(ctx, repo, m.Layers[0])
+		if err != nil {
+			continue
+		}
+		var doc struct {
+			Predicate struct {
+				RunDetails struct {
+					Builder struct {
+						ID string `json:"id"`
+					} `json:"builder"`
+				} `json:"runDetails"`
+			} `json:"predicate"`
+		}
+		if json.Unmarshal(blob, &doc) != nil {
+			continue
+		}
+		if id := doc.Predicate.RunDetails.Builder.ID; id != "" {
+			return id
+		}
+	}
+	return ""
 }
 
 // BottleDigest is the digest of the tarball published under one tag — the
@@ -673,6 +752,13 @@ func (c *OCIClient) attestations(ctx context.Context, repo *remote.Repository, p
 	if err != nil {
 		return nil, 0, err
 	}
+	return c.signatureAttestations(ctx, repo, project, refs)
+}
+
+// signatureAttestations is attestations over a referrer listing the caller
+// already holds, so a caller that needs the provenance too pays for ONE
+// listing instead of two.
+func (c *OCIClient) signatureAttestations(ctx context.Context, repo *remote.Repository, project string, refs []ocispec.Descriptor) ([]Attestation, int, error) {
 	var atts []Attestation
 	malformed := 0
 	for i := range refs {
