@@ -25,6 +25,15 @@ type Build struct {
 	Installed string
 	// Published says the registry carries it.
 	Published bool
+	// Spec is what the build IS, read from its manifest. Zero when the
+	// registry could not be asked, when the bottle predates identities, or
+	// when it was only mirrored — all three are "nothing records what this
+	// was built from", which a caller must say rather than show as blank.
+	//
+	// ⛔ IT IS WHY THE LIST IS USABLE AT ALL. Two hashes with nothing beside
+	// them hand the reader the problem the command was asked to solve; see
+	// Distinguish.
+	Spec Concrete
 }
 
 // Hash is the build's address — the short form that appears in its tag and
@@ -70,7 +79,46 @@ func BuildsOf(project, version, dir, osn, arch string) ([]Build, error) {
 		byHash[v.Variant] = &Build{Version: v, Published: true}
 		order = append(order, v.Variant)
 	}
-	return collect(byHash, order), nil
+	out := collect(byHash, order)
+	describeBuilds(out, project, osn, arch)
+	return out, nil
+}
+
+// describeBuilds reads each published build's spec off its manifest.
+//
+// ⛔ A SPEC THAT CANNOT BE READ IS LEFT ZERO AND THE LISTING STILL HAPPENS.
+// The hashes, the store paths and the published flags are already correct and
+// are what the caller asked for; refusing the whole answer because one
+// manifest would not parse would trade a complete list for none. The caller
+// says "nothing recorded" for the rows it could not describe, which is true
+// whether the bottle predates identities or its manifest was unreadable.
+//
+// ⛔ AND IT IS ONE FETCH PER BUILD, NOT PER VERSION. That is the cost of the
+// question: a list of two builds costs two manifests. A caller that cannot
+// pay it should not be asking which builds exist.
+func describeBuilds(builds []Build, project, osn, arch string) {
+	var c *OCIClient
+	for i := range builds {
+		if !builds[i].Published {
+			continue
+		}
+		if c == nil {
+			var err error
+			if c, err = NewOCIClient(DistBase); err != nil {
+				return
+			}
+		}
+		// The tag the build was published under: the version, plus the hash
+		// when it has one. A bottle from before identities has no suffix,
+		// and asking for one would 404 a tag that exists.
+		tag := builds[i].Version.Raw
+		if h := builds[i].Hash(); h != "" {
+			tag += variantSep + h
+		}
+		if spec, ok, err := c.SpecOf(project, tag, osn, arch); err == nil && ok {
+			builds[i].Spec = spec
+		}
+	}
 }
 
 // publishedBuildsOf is the registry half, kept separate so the store half
