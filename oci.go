@@ -615,6 +615,51 @@ func (c *OCIClient) SignaturesOfTag(project, tag, osn, arch string) (SignatureRe
 	return c.SignaturesOfDigest(project, tag, osn, arch, man.Layers[0].Digest.String())
 }
 
+// BottleDigest is the digest of the tarball published under one tag — the
+// thing a signature commits to, read from the per-platform manifest without
+// downloading a byte of the bottle.
+//
+// ⛔ IT IS WHAT A REBUILDER COMPARES AGAINST. "Did I produce the same bottle?"
+// has to be answerable before deciding whether to sign, and answerable
+// cheaply enough that asking is the normal thing to do.
+func (c *OCIClient) BottleDigest(project, ver, osn, arch string) (string, error) {
+	ctx := context.Background()
+	repo, err := c.repository(project)
+	if err != nil {
+		return "", err
+	}
+	_, man, err := c.resolvePlatform(ctx, repo, project, ver, osn, arch)
+	if err != nil {
+		return "", err
+	}
+	if len(man.Layers) == 0 {
+		return "", fmt.Errorf("bottle: %s %s (%s/%s) has no layer", project, ver, osn, arch)
+	}
+	return man.Layers[0].Digest.String(), nil
+}
+
+// AttachReferrer adds one attestation to an ALREADY PUBLISHED bottle, leaving
+// the bottle itself untouched.
+//
+// ⛔⛔ A SECOND BUILDER MUST NOT HAVE TO REPUBLISH THE BOTTLE TO VOUCH FOR IT.
+// Every other path here pushes a tarball and its attestations together, which
+// is right for the builder who made it and wrong for everyone else: re-pushing
+// is how you end up with two objects where the point was that there is one.
+// Independent agreement means several signatures on the SAME bytes, so
+// attaching has to be an operation of its own.
+func (c *OCIClient) AttachReferrer(project, ver, osn, arch string, rf Referrer) error {
+	ctx := context.Background()
+	repo, err := c.repository(project)
+	if err != nil {
+		return err
+	}
+	desc, _, err := c.resolvePlatform(ctx, repo, project, ver, osn, arch)
+	if err != nil {
+		return err
+	}
+	return c.pushReferrer(ctx, repo, desc, rf)
+}
+
 // attestations fetches every signature referrer on a subject and returns the
 // candidate signatures, plus how many referrers were signature-typed but
 // unusable.

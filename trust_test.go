@@ -538,6 +538,63 @@ func TestBuildsOfCarriesTheSigners(t *testing.T) {
 	}
 }
 
+// ⛔⛔ THE SECOND BUILDER'S WHOLE WORKFLOW, END TO END. Rebuild, compare the
+// digest against what is published, and — only if they agree — attach a
+// signature to the SAME bytes. Not a second bottle: the point of independent
+// agreement is that there is one artefact and several people's word on it.
+func TestAttachASecondSignatureToAPublishedBottle(t *testing.T) {
+	ours, alice := mustGenerate(t), mustGenerate(t)
+	pinKey(t, ours)
+
+	fr := newFakeRegistry(t, false)
+	defer fr.close()
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
+	tarball := makeGzTarball("rebuilt-identically")
+	pushTwoSigned(t, c, "rebuilt.pkg", tarball, ours)
+
+	// What a rebuilder checks before signing anything.
+	published, err := c.BottleDigest("rebuilt.pkg", "1.0.0", "linux", "x86-64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if published != digestOf(tarball) {
+		t.Fatalf("published digest %s is not the rebuild's %s", published, digestOf(tarball))
+	}
+
+	payload, err := sign.SimpleSigningPayload("pkg:pkgx/rebuilt.pkg", published)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.AttachReferrer("rebuilt.pkg", "1.0.0", "linux", "x86-64", Referrer{
+		ArtifactType: ArtifactTypeSignature,
+		MediaType:    MediaSimpleSigning,
+		Blob:         payload,
+		Annotations: map[string]string{
+			CosignSignatureAnnotation: alice.SignPayload(payload),
+			SignerKeyIDAnnotation:     Signer{Key: alice.PublicKeyString()}.KeyID(),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The bottle now meets a threshold of two that it did not meet before.
+	newTrustEnv(t, map[string]string{
+		ExtraTrustedKeysEnv: "alice:" + alice.PublicKeyString(),
+		TrustThresholdEnv:   "2",
+	})
+	rep, err := c.SignaturesOfTag("rebuilt.pkg", "1.0.0", "linux", "x86-64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.OK() || strings.Join(rep.Signers, ",") != "alice,"+DefaultSignerName {
+		t.Errorf("after attaching: signers=%v ok=%v", rep.Signers, rep.OK())
+	}
+	if err := c.VerifyBottle("rebuilt.pkg", "1.0.0", "linux", "x86-64", tarball); err != nil {
+		t.Errorf("install-time verification: %v", err)
+	}
+}
+
 // SignersOfTag answers "who vouches for this?" about a build nobody has
 // downloaded: the digest the signature commits to is already in the manifest.
 func TestSignersOfTagWithoutTheTarball(t *testing.T) {
