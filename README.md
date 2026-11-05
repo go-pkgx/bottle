@@ -85,8 +85,8 @@ fixtures (encode side).
 ## What gets verified
 
 With `ZPKG_VERIFY` on — the default — **every** pull that brings bytes onto
-the machine checks the bottle's cosign signature against the pinned key and
-fails closed. Not "every install": every pull.
+the machine checks the bottle's cosign signatures against the configured
+trust set and fails closed. Not "every install": every pull.
 
 That distinction is the whole of it, and it has been got wrong twice. The
 first time, the check lived in `DownloadBottle`, which only the mirror
@@ -103,7 +103,46 @@ it is verified *less* often than a bottle, not more — so the one check it
 gets has to happen.
 
 The rule, for anything added later: if it pulls bytes, it goes through
-`verifyPulled`, whatever it means to do with them.
+`verifyPulled`, whatever it means to do with them. The store cache is no
+exception: a cache hit is re-checked against the signatures the registry
+advertises, because a cache is an optimisation and never an authority.
+
+## Who may vouch, and how many of them
+
+Verification is against a **trust set**, not a single key: TUF's shape (a set
+of keys and a *threshold* of them) with Nix's spelling for the list.
+
+| variable | what it does |
+| --- | --- |
+| `ZPKG_TRUSTED_KEYS` | **replaces** the trust set — `name:KEY`, whitespace separated |
+| `ZPKG_EXTRA_TRUSTED_KEYS` | **adds** to it, which is usually what you want |
+| `ZPKG_TRUST_THRESHOLD` | how many *distinct* trusted keys must have signed (default `1`) |
+
+```
+ZPKG_EXTRA_TRUSTED_KEYS='alice:RWQ…' ZPKG_TRUST_THRESHOLD=2 pkgx +fftw.org
+```
+
+Two people building the same inputs get the **same** hash — deliberately, and
+that collision is the evidence. What tells them apart is the *attestation*:
+each attaches their own signature referrer to the one bottle, and the client
+counts how many distinct trusted keys it can verify. A threshold of 2 means
+"I install nothing that two builders did not independently reproduce".
+
+Three rules this hangs on:
+
+- **Each key counts once** (TUF §5.4.2). Otherwise a threshold of two is met
+  by pushing one signature twice, which anyone who can push can do.
+- **A signature from outside the trust set is not an error.** Anybody may sign
+  a public artefact; if a stranger's signature invalidated a bottle,
+  invalidating any bottle would cost one push. It is counted and ignored.
+- **A threshold nobody could meet is refused when the configuration is read**,
+  not at install time, because that mistake is in the configuration and a
+  message about the bottle would send you looking in the wrong place.
+
+The signer name you see comes from **your** trust set and never from the
+registry: a name on the artefact is written by whoever pushed it. The referrer
+carries only a key id, which is checkable, and which is used to pick which key
+to try first — never to decide which may succeed.
 
 ## What a project NAME may be
 

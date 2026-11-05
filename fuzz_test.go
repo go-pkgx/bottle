@@ -115,6 +115,61 @@ func FuzzDisplayText(f *testing.F) {
 	})
 }
 
+// A TRUST SET IS CONFIGURATION, AND CONFIGURATION TRAVELS.
+//
+// ZPKG_TRUSTED_KEYS is read from the environment or from ~/.zpkg/config.hcl2,
+// which is the sort of thing a team ships in a dotfiles repository, a base
+// image or a CI snippet. What a signer is NAMED there is then printed in the
+// one line a user reads to decide whether to trust a bottle:
+//
+//	signed by: go-zpkg, alice
+//
+// A name carrying ERASE-LINE + CR rewrites that line into a stronger claim
+// than the one that was true — the same attack displaytext.go documents
+// against a project summary, aimed at the verdict instead of a description.
+// So the invariant here is the project-NAME one, not the summary one: a name
+// that gets past the parser is printable, or there is no Signer.
+func FuzzParseSigners(f *testing.F) {
+	// A real key, so the seeds reach the name check rather than stopping at
+	// the key. (It is the published go-zpkg key; nothing secret is here.)
+	const k = "RWQ+rmH+fXy2iYr+gReQAOQtYWtH0A7UlxcAa2hpr+txNBwGqtpFsR6L"
+	f.Add("go-zpkg:" + k)
+	f.Add(k)
+	f.Add("go-zpkg:" + k + "  alice:" + k)
+	// ⛔⛔ THE SPOOF SEED TOOK TWO CORRECTIONS TO BECOME ONE. Written as
+	// "…signed by: go-zpkg, alice" it failed on the KEY, because its own
+	// colon ended the name; rewritten without the colon it was split by
+	// strings.Fields at the spaces into six unparseable entries. Either way
+	// it went green without ever reaching the check it exists for. An escape
+	// sequence needs neither a colon nor a space, which is the version that
+	// actually attacks: the line erases itself and reprints.
+	f.Add("go-zpkg\x1b[2Kalice:" + k)
+	f.Add("ok\x07bell:" + k)
+	f.Add("a​b:" + k)
+	f.Add(":" + k)
+	f.Add("::::" + k)
+	f.Add("name-with-no-key:")
+	f.Fuzz(func(t *testing.T, list string) {
+		signers, err := ParseSigners(list)
+		if err != nil {
+			return
+		}
+		if len(signers) > MaxTrustedKeys {
+			t.Fatalf("parsed %d keys, over the %d bound", len(signers), MaxTrustedKeys)
+		}
+		for _, s := range signers {
+			if s.Name == "" {
+				t.Fatal("a signer with no name would print as an empty verdict")
+			}
+			mustBePrintable(t, "a signer name", s.Name)
+			mustBePrintable(t, "a signer line", s.String())
+			if len(s.KeyID()) != 16 {
+				t.Fatalf("key id %q is not 8 bytes of hex", s.KeyID())
+			}
+		}
+	})
+}
+
 // A MACH-O LOAD COMMAND IS INPUT FROM A STRANGER.
 //
 // The three targets above all read something fetched as DATA — a catalogue, a
