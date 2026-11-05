@@ -39,6 +39,15 @@ var SigningPublicKey = "RWQ+rmH+fXy2iYr+gReQAOQtYWtH0A7UlxcAa2hpr+txNBwGqtpFsR6L
 const (
 	// ArtifactTypeSignature marks a cosign signature referrer manifest.
 	ArtifactTypeSignature = "application/vnd.dev.cosign.artifact.sig.v1+json"
+	// ArtifactTypeProvenance marks the in-toto SLSA provenance referrer: the
+	// statement that says WITH WHAT a bottle was built.
+	//
+	// ⛔ IT IS THE ONLY PLACE THE BUILDER IS RECORDED. The build's identity
+	// (Concrete) deliberately excludes the builder — a zbk release must not
+	// re-address every bottle in the registry, which is Nix's and Spack's
+	// position too. So "which factory made this?" is answerable ONLY from
+	// this attestation, and anything that wants to ask has to read it.
+	ArtifactTypeProvenance = "application/vnd.in-toto+json"
 	// MediaSimpleSigning is the media type of the simple-signing payload blob.
 	MediaSimpleSigning = "application/vnd.dev.cosign.simplesigning.v1+json"
 	// CosignSignatureAnnotation carries the base64 signature on the referrer

@@ -42,6 +42,18 @@ type Build struct {
 	// bottle has no recoverable build date — the timestamp is pinned so a
 	// re-publish is byte-identical. This is when you got it. See BuildOrder.
 	InstalledAt time.Time
+	// Builder is what made this build, from the in-toto provenance —
+	// `https://github.com/go-zpkg/zbk@v0.64.0`. Empty when nothing records
+	// it.
+	//
+	// ⛔ IT IS NOT IN THE HASH, ON PURPOSE, AND THAT IS WHY IT HAS TO BE
+	// SHOWN. A zbk release must not re-address every bottle in the registry
+	// — Nix and Spack take the same position about their own builders — so
+	// two bottles built by different factories from identical inputs share
+	// an identity. The only way a reader can tell them apart is this field,
+	// which means a listing that omits it has thrown away the answer to
+	// "with what was this built?".
+	Builder string
 	// Signatures is who vouches for this build, or nil when the registry was
 	// not asked or would not answer.
 	//
@@ -56,6 +68,24 @@ type Build struct {
 // Hash is the build's address — the short form that appears in its tag and
 // its directory name.
 func (b Build) Hash() string { return b.Version.Variant }
+
+// ShortBuilder renders a SLSA builder id for a column:
+//
+//	https://github.com/go-zpkg/zbk@v0.64.0  →  zbk@v0.64.0
+//	https://github.com/go-pkgx/bk@v0.26.0   →  bk@v0.26.0
+//
+// ⛔ THE ORGANISATION IS DROPPED AND THE TOOL AND VERSION ARE NOT. A reader
+// scanning the column is asking "which factory, how old"; the host and owner
+// are the same for every row we publish and spend a third of the line. An id
+// that does not look like a URL is returned whole — a builder we do not
+// recognise is exactly the one worth reading in full.
+func ShortBuilder(id string) string {
+	i := strings.LastIndexByte(id, '/')
+	if i < 0 || !strings.Contains(id, "://") {
+		return id
+	}
+	return id[i+1:]
+}
 
 // BuildsOf lists every build of one version of a project: those installed in
 // dir, those published for osn/arch, and the ones that are both.
@@ -141,8 +171,13 @@ func describeBuilds(builds []Build, project, osn, arch string) {
 		// Left nil on any error, which says "not asked" rather than
 		// "nobody signed it". A report that came back short of the
 		// threshold is still an ANSWER and is kept.
-		if rep, err := c.SignaturesOfTag(project, tag, osn, arch); err == nil {
+		//
+		// One call for both: who signed it and what built it come off the
+		// same referrer listing, so asking for both costs what asking for
+		// one used to.
+		if rep, builder, err := c.ProvenanceOfTag(project, tag, osn, arch); err == nil {
 			builds[i].Signatures = &rep
+			builds[i].Builder = builder
 		}
 	}
 }

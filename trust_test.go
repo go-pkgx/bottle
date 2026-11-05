@@ -497,6 +497,90 @@ func TestInstallEnforcesTheThreshold(t *testing.T) {
 	}
 }
 
+// ⛔⛔ "WITH WHAT WAS THIS BUILT" HAS ONE ANSWER AND IT IS THE PROVENANCE.
+// The builder is deliberately absent from the identity — a zbk release must
+// not re-address every bottle — so two factories building identical inputs
+// produce the same hash, and the attestation is the only thing that tells
+// them apart. A reader who cannot see it cannot audit the chain at all.
+func TestProvenanceNamesWhatBuiltTheBottle(t *testing.T) {
+	ours := mustGenerate(t)
+	pinKey(t, ours)
+	newTrustEnv(t, nil)
+
+	fr := newFakeRegistry(t, false)
+	defer fr.close()
+	c, _ := NewOCIClient(fr.base("go-zpkg/bottles"))
+	tarball := makeGzTarball("provenanced")
+
+	const builder = "https://github.com/go-zpkg/zbk@v0.64.0"
+	payload, err := sign.SimpleSigningPayload("pkg:pkgx/prov.pkg", digestOf(tarball))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmt := []byte(`{"predicate":{"runDetails":{"builder":{"id":"` + builder + `"}}}}`)
+	if _, err := c.PushWithReferrers("prov.pkg", "1.0.0", "linux", "x86-64", tarball, ".tar.gz", []Referrer{
+		{ArtifactType: ArtifactTypeProvenance, MediaType: ArtifactTypeProvenance, Blob: stmt},
+		{ArtifactType: ArtifactTypeSignature, MediaType: MediaSimpleSigning, Blob: payload,
+			Annotations: map[string]string{
+				CosignSignatureAnnotation: ours.SignPayload(payload),
+				SignerKeyIDAnnotation:     Signer{Key: ours.PublicKeyString()}.KeyID(),
+			}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rep, got, err := c.ProvenanceOfTag("prov.pkg", "1.0.0", "linux", "x86-64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != builder {
+		t.Errorf("builder = %q, want %q", got, builder)
+	}
+	// ⛔ AND IT STILL ANSWERS THE SIGNATURE HALF. The two come off one
+	// referrer listing; a refactor that broke the second while keeping the
+	// first would go unnoticed without this line.
+	if !rep.OK() || strings.Join(rep.Signers, ",") != DefaultSignerName {
+		t.Errorf("signers = %v ok=%v", rep.Signers, rep.OK())
+	}
+
+	// A bottle with no provenance says "" — NOT RECORDED, which a caller
+	// must not render as "built by nobody".
+	plain := makeGzTarball("no-provenance")
+	pushTwoSigned(t, c, "plain.pkg", plain, ours)
+	if _, got, err := c.ProvenanceOfTag("plain.pkg", "1.0.0", "linux", "x86-64"); err != nil || got != "" {
+		t.Errorf("a bottle with no provenance: builder=%q err=%v", got, err)
+	}
+
+	// An unparseable statement is the same answer, not a refusal: one broken
+	// attestation must not cost the whole listing.
+	broken := makeGzTarball("bad-provenance")
+	if _, err := c.PushWithReferrers("bad.pkg", "1.0.0", "linux", "x86-64", broken, ".tar.gz", []Referrer{
+		{ArtifactType: ArtifactTypeProvenance, MediaType: ArtifactTypeProvenance, Blob: []byte("{not json")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, got, err := c.ProvenanceOfTag("bad.pkg", "1.0.0", "linux", "x86-64"); err != nil || got != "" {
+		t.Errorf("an unreadable statement: builder=%q err=%v", got, err)
+	}
+}
+
+func TestShortBuilder(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://github.com/go-zpkg/zbk@v0.64.0": "zbk@v0.64.0",
+		"https://github.com/go-pkgx/bk@v0.26.0":  "bk@v0.26.0",
+		// Not a URL: returned whole, because a builder we do not recognise
+		// is the one most worth reading in full.
+		"somebody's laptop": "somebody's laptop",
+		"":                  "",
+		// A URL with no path beyond the host keeps what there is.
+		"https://example.test": "example.test",
+	} {
+		if got := ShortBuilder(in); got != want {
+			t.Errorf("ShortBuilder(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // A build listing carries who vouches for each build, and keeps "not asked"
 // apart from "nobody".
 func TestBuildsOfCarriesTheSigners(t *testing.T) {
