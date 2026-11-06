@@ -237,16 +237,55 @@ func ParseSigners(list string) ([]Signer, error) {
 	return out, nil
 }
 
-// TrustSet is the whole policy: who may vouch, and how many must.
+// TrustSet is the whole policy: who may vouch, how many must, and whose word
+// is no longer accepted.
 type TrustSet struct {
 	Signers   []Signer
 	Threshold int
+	// Revoked are keys that were ours and are not believed any more.
+	//
+	// ⛔ THEY ARE NOT SIMPLY ABSENT FROM Signers. Absent means "we do not
+	// know this key", which is a stranger and is noise. Present-and-revoked
+	// means "this was ours and somebody else may hold it", which is a fact
+	// about our own supply chain that a reader must be told in those words.
+	Revoked []RevokedKey
 }
 
-// DefaultTrustSet is the project's own key, threshold 1.
+// revokedBy reports which revoked key made this signature, if any.
+func (t TrustSet) revokedBy(digest string, a Attestation) (RevokedKey, bool) {
+	for _, r := range t.Revoked {
+		if (Signer{Name: r.Name, Key: r.Key}).verifies(digest, a) {
+			return r, true
+		}
+	}
+	return RevokedKey{}, false
+}
+
+// DefaultTrustSet is the project's CURRENT key plus every key it has retired,
+// threshold 1.
 //
-// It reads SigningPublicKey at call time rather than at init, because that
-// variable is the seam tests swap to sign with a throwaway key.
+// ⛔⛔ THE RETIRED ONES ARE IN IT, AND THAT IS WHAT MAKES ROTATION POSSIBLE AT
+// ALL. Rotating is how you answer a lost or compromised key; if rotating also
+// invalidated every bottle the old key signed, the registry would go dark the
+// day it was most needed and nobody would ever rotate. A signature is a
+// statement about bytes; changing the key we sign WITH says nothing about
+// what is already signed.
+//
+// ⛔ THEY ARE NOT RANKED AND NOT DATED. Verify counts DISTINCT keys, so a
+// bottle signed by the current key and an old one counts as two — which is
+// exactly right during an overlap, where the same publisher deliberately
+// signs with both. A scheme that discounted retired keys would make an
+// overlap bottle look like one signer, and a threshold of two unmeetable
+// precisely while rotating.
+//
+// It reads the variables at call time rather than at init, because
+// SigningPublicKey is the seam tests swap to sign with a throwaway key.
+//
+// ⛔ AN UNPARSEABLE RETIRED ENTRY IS SKIPPED, NOT FATAL. It is a compiled-in
+// typo in a list that grows by hand, and refusing to build any trust set
+// over it would take out verification entirely — including for the current
+// key, which is fine. The current key is the one whose failure returns an
+// empty set, because without it there is nothing to trust.
 func DefaultTrustSet() TrustSet {
 	s, err := ParseSigner(DefaultSignerName + ":" + SigningPublicKey)
 	if err != nil {
@@ -255,7 +294,39 @@ func DefaultTrustSet() TrustSet {
 		// plainly rather than passing.
 		return TrustSet{Threshold: DefaultThreshold}
 	}
-	return TrustSet{Signers: []Signer{s}, Threshold: DefaultThreshold}
+	signers := []Signer{s}
+	for _, entry := range RetiredSigningPublicKeys {
+		if r, err := ParseSigner(entry); err == nil {
+			signers = append(signers, r)
+		}
+	}
+	// ⛔ A REVOKED KEY IS REMOVED FROM THE SIGNERS, NOT MERELY LISTED BESIDE
+	// THEM. Leaving it in both would let it satisfy the threshold while the
+	// report called it revoked — a verdict that contradicts itself, and the
+	// contradiction resolves in the attacker's favour.
+	return TrustSet{
+		Signers:   withoutRevoked(dedupeSigners(signers), RevokedSigningKeys),
+		Revoked:   RevokedSigningKeys,
+		Threshold: DefaultThreshold,
+	}
+}
+
+// withoutRevoked drops any signer whose key has been revoked.
+func withoutRevoked(in []Signer, revoked []RevokedKey) []Signer {
+	if len(revoked) == 0 {
+		return in
+	}
+	bad := map[string]bool{}
+	for _, r := range revoked {
+		bad[(Signer{Key: r.Key}).KeyID()] = true
+	}
+	out := in[:0:0]
+	for _, s := range in {
+		if !bad[s.KeyID()] {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // LoadTrustSet builds the trust set from the environment (or ~/.zpkg/config.hcl2,
@@ -356,14 +427,34 @@ type Attestation struct {
 // — name the finding and NOT the bottle, because only the caller knows which
 // bottle was being checked.
 func (t TrustSet) Count(digest string, atts []Attestation) (names []string, untrusted int, err error) {
-	if len(t.Signers) == 0 {
-		return nil, 0, errors.New("the trust set is empty, so nothing can be verified")
+	n, u, _, err := t.count(digest, atts)
+	return n, u, err
+}
+
+// count is Count plus the revoked keys it found, which SignatureReport needs
+// and which Count's two-number signature has no room for.
+func (t TrustSet) count(digest string, atts []Attestation) (names []string, untrusted int, revoked []RevokedKey, err error) {
+	if len(t.Signers) == 0 && len(t.Revoked) == 0 {
+		return nil, 0, nil, errors.New("the trust set is empty, so nothing can be verified")
 	}
 	if len(atts) > MaxSignatures {
-		return nil, 0, fmt.Errorf("%d signatures attached, more than the %d this will examine: refusing", len(atts), MaxSignatures)
+		return nil, 0, nil, fmt.Errorf("%d signatures attached, more than the %d this will examine: refusing", len(atts), MaxSignatures)
 	}
 	counted := map[string]bool{}
+	seenRevoked := map[string]bool{}
 	for _, a := range atts {
+		// ⛔ REVOCATION IS CHECKED FIRST. A key can only be in one of the
+		// two sets — DefaultTrustSet removes revoked keys from the signers
+		// — but an operator's own ZPKG_TRUSTED_KEYS can name one, and a
+		// verdict that both counted it and called it revoked would resolve
+		// in the attacker's favour.
+		if r, yes := t.revokedBy(digest, a); yes {
+			if !seenRevoked[(Signer{Key: r.Key}).KeyID()] {
+				seenRevoked[(Signer{Key: r.Key}).KeyID()] = true
+				revoked = append(revoked, r)
+			}
+			continue
+		}
 		s, ok := t.verifyOne(digest, a)
 		if !ok {
 			untrusted++
@@ -376,7 +467,7 @@ func (t TrustSet) Count(digest string, atts []Attestation) (names []string, untr
 		names = append(names, s.Name)
 	}
 	sort.Strings(names)
-	return names, untrusted, nil
+	return names, untrusted, revoked, nil
 }
 
 // SignatureReport is what a registry had to say about who signed one bottle:
@@ -396,13 +487,23 @@ type SignatureReport struct {
 	// Counted rather than skipped: "unsigned" and "signed, but the referrer
 	// is broken" are different facts, and the second names a publishing bug.
 	Malformed int
+	// Revoked are OUR OWN keys, found on this bottle, that are no longer
+	// believed.
+	//
+	// ⛔⛔ THIS IS NOT "Untrusted WITH A NAME". A stranger's signature is
+	// noise anybody can make and is correctly ignored. Our own revoked key
+	// on a bottle means either that we published it before the key was
+	// compromised — and cannot prove which — or that whoever took the key
+	// published it. A reader has to act on that, and they can only act on
+	// it if the verdict says it in those words.
+	Revoked []RevokedKey
 	// Threshold is how many Signers were required.
 	Threshold int
 }
 
 // Signed reports whether anything at all was attached.
 func (r SignatureReport) Signed() bool {
-	return len(r.Signers) > 0 || r.Untrusted > 0 || r.Malformed > 0
+	return len(r.Signers) > 0 || r.Untrusted > 0 || r.Malformed > 0 || len(r.Revoked) > 0
 }
 
 // OK reports whether the threshold was met.
@@ -423,7 +524,32 @@ func (r SignatureReport) Err() error {
 	if !r.Signed() {
 		return errors.New("unsigned (no signature referrer)")
 	}
-	return shortOfThreshold(r.Signers, r.Untrusted, r.Malformed, r.want())
+	return shortOfThreshold(r.Signers, r.Untrusted, r.Malformed, r.want(), r.Revoked)
+}
+
+// RevokedNote is the line a command prints when a bottle carries one of our
+// own revoked keys, or "" when it does not.
+//
+// ⛔ IT IS SEPARATE FROM THE VERDICT ON PURPOSE. A bottle can meet the
+// threshold on its current signature AND still carry a revoked one — that is
+// what a re-signed bottle looks like before the old referrer is removed, and
+// what a planted signature looks like too. The verdict says whether to
+// install; this says what else is on the artefact.
+func (r SignatureReport) RevokedNote() string {
+	if len(r.Revoked) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("⚠ this bottle carries a signature from a key we REVOKED:")
+	for _, k := range r.Revoked {
+		b.WriteString("\n  " + k.Name)
+		if k.Because != "" {
+			b.WriteString(" — " + k.Because)
+		}
+	}
+	b.WriteString("\n  It signs for nothing. Whether this artefact predates the compromise " +
+		"cannot be told from it:\n  every bottle carries the same pinned timestamp.")
+	return b.String()
 }
 
 // String is the one cell a listing prints: who vouches for this build.
@@ -457,7 +583,7 @@ func (t TrustSet) verifyOne(digest string, a Attestation) (Signer, bool) {
 
 // shortOfThreshold says what was found and what was wanted, in that order,
 // because the reader's next question is always "signed by whom, then?".
-func shortOfThreshold(names []string, untrusted, malformed, want int) error {
+func shortOfThreshold(names []string, untrusted, malformed, want int, revoked []RevokedKey) error {
 	var b strings.Builder
 	switch len(names) {
 	case 0:
@@ -476,6 +602,15 @@ func shortOfThreshold(names []string, untrusted, malformed, want int) error {
 		b.WriteString("; 1 signature referrer is malformed")
 	} else if malformed > 1 {
 		fmt.Fprintf(&b, "; %d signature referrers are malformed", malformed)
+	}
+	// ⛔ NAMED, NOT COUNTED. "1 revoked signature" tells a reader nothing
+	// they can act on; the key's name and the reason it was revoked is the
+	// whole content of the warning.
+	for _, k := range revoked {
+		b.WriteString("; signed by REVOKED key " + k.Name)
+		if k.Because != "" {
+			b.WriteString(" (" + k.Because + ")")
+		}
 	}
 	fmt.Fprintf(&b, "; %s=%d requires %d", TrustThresholdEnv, want, want)
 	return errors.New(b.String())

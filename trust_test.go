@@ -96,6 +96,136 @@ func TestLoadTrustSetDefault(t *testing.T) {
 	}
 }
 
+// ⛔⛔ ROTATION MUST NOT INVALIDATE WHAT THE OLD KEY SIGNED. If retiring a key
+// dropped it from the default trust set, the whole published registry would
+// stop verifying the day we rotate — and since rotation is the answer to a
+// lost or compromised key, a design where it breaks everything is one where
+// nobody rotates.
+func TestRetiredKeysStayTrusted(t *testing.T) {
+	current, old := mustGenerate(t), mustGenerate(t)
+	pinKey(t, current)
+	oldRetired := RetiredSigningPublicKeys
+	RetiredSigningPublicKeys = []string{"go-zpkg-2025:" + old.PublicKeyString()}
+	t.Cleanup(func() { RetiredSigningPublicKeys = oldRetired })
+	newTrustEnv(t, nil)
+
+	ts, err := LoadTrustSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(ts.Names(), ","); got != DefaultSignerName+",go-zpkg-2025" {
+		t.Fatalf("trust set = %q, want the current key and the retired one", got)
+	}
+
+	const digest = "sha256:aa"
+	// A bottle signed only by the RETIRED key still verifies.
+	names, untrusted, err := ts.Count(digest, []Attestation{signFor(t, old, digest, false)})
+	if err != nil || untrusted != 0 || strings.Join(names, ",") != "go-zpkg-2025" {
+		t.Errorf("a bottle signed by the retired key: names=%v untrusted=%d err=%v", names, untrusted, err)
+	}
+
+	// ⛔ AND AN OVERLAP BOTTLE COUNTS AS TWO. During a rotation the publisher
+	// signs with both; a scheme that discounted the retired key would make
+	// that look like one signer and a threshold of two unmeetable exactly
+	// while rotating.
+	names, _, err = ts.Count(digest, []Attestation{
+		signFor(t, current, digest, true),
+		signFor(t, old, digest, true),
+	})
+	if err != nil || len(names) != 2 {
+		t.Errorf("overlap bottle: names=%v err=%v", names, err)
+	}
+
+	// A typo in the retired list is skipped, not fatal: the current key must
+	// keep working, because without it there is nothing to trust at all.
+	RetiredSigningPublicKeys = []string{"broken:not-a-key", "go-zpkg-2025:" + old.PublicKeyString()}
+	ts, err = LoadTrustSet()
+	if err != nil || len(ts.Signers) != 2 {
+		t.Errorf("an unparseable retired entry took out the set: %v %v", ts.Names(), err)
+	}
+}
+
+// ⛔⛔ REVOKING IS NOT RETIRING. A retired key's signatures are still ours; a
+// revoked key's cannot be told from a forgery, because somebody else may hold
+// it and no bottle carries a date that would say which side of the compromise
+// it falls on.
+func TestRevokedKeySignsForNothing(t *testing.T) {
+	current, leaked := mustGenerate(t), mustGenerate(t)
+	pinKey(t, current)
+	oldRev := RevokedSigningKeys
+	oldRet := RetiredSigningPublicKeys
+	// The leaked key is BOTH retired and revoked — the realistic shape: it
+	// was in service, we rotated away from it, and then it turned up.
+	RetiredSigningPublicKeys = []string{"go-zpkg-2025:" + leaked.PublicKeyString()}
+	RevokedSigningKeys = []RevokedKey{{
+		Name: "go-zpkg-2025", Key: leaked.PublicKeyString(),
+		Because: "CI secret exposed in run 42067525642",
+	}}
+	t.Cleanup(func() { RevokedSigningKeys, RetiredSigningPublicKeys = oldRev, oldRet })
+	newTrustEnv(t, nil)
+
+	ts, err := LoadTrustSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// ⛔ REVOCATION WINS OVER RETIREMENT. Leaving it in both lists would let
+	// it satisfy the threshold while the report called it revoked — a
+	// verdict that contradicts itself, resolving in the attacker's favour.
+	if got := strings.Join(ts.Names(), ","); got != DefaultSignerName {
+		t.Fatalf("trust set = %q, want the revoked key gone", got)
+	}
+
+	const digest = "sha256:aa"
+	names, untrusted, revoked, err := ts.count(digest, []Attestation{signFor(t, leaked, digest, false)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(names) != 0 {
+		t.Errorf("a revoked key counted towards the threshold: %v", names)
+	}
+	// ⛔ AND IT IS NOT "untrusted". A stranger's signature is noise anybody
+	// can make; OUR revoked key on a bottle is a fact about our supply chain.
+	if untrusted != 0 || len(revoked) != 1 || revoked[0].Name != "go-zpkg-2025" {
+		t.Errorf("untrusted=%d revoked=%+v — a revoked key must be reported as itself", untrusted, revoked)
+	}
+
+	rep := SignatureReport{Signers: names, Untrusted: untrusted, Revoked: revoked, Threshold: 1}
+	if rep.OK() {
+		t.Fatal("a bottle signed only by a revoked key passed")
+	}
+	if e := rep.Err(); e == nil || !strings.Contains(e.Error(), "REVOKED key go-zpkg-2025") ||
+		!strings.Contains(e.Error(), "CI secret exposed") {
+		t.Errorf("the verdict must name the key and the reason: %v", e)
+	}
+	note := rep.RevokedNote()
+	for _, want := range []string{"go-zpkg-2025", "CI secret exposed", "same pinned timestamp"} {
+		if !strings.Contains(note, want) {
+			t.Errorf("the note should mention %q:\n%s", want, note)
+		}
+	}
+
+	// A bottle signed by the CURRENT key and the revoked one still installs
+	// — one good signature meets a threshold of one — but the note says the
+	// revoked signature is there, because the verdict and the inventory are
+	// different questions.
+	names, _, revoked, err = ts.count(digest, []Attestation{
+		signFor(t, current, digest, false),
+		signFor(t, leaked, digest, false),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep = SignatureReport{Signers: names, Revoked: revoked, Threshold: 1}
+	if !rep.OK() || rep.RevokedNote() == "" {
+		t.Errorf("mixed bottle: ok=%v note=%q", rep.OK(), rep.RevokedNote())
+	}
+
+	// No revoked keys at all: no note, and nothing in the verdict.
+	if (SignatureReport{Threshold: 1}).RevokedNote() != "" {
+		t.Error("a note was produced with nothing revoked")
+	}
+}
+
 func TestLoadTrustSetReplaceAndExtend(t *testing.T) {
 	ours, alice := mustGenerate(t), mustGenerate(t)
 	pinKey(t, ours)
