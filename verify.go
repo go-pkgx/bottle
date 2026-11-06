@@ -57,6 +57,46 @@ var SigningPublicKey = "RWQ+rmH+fXy2iYr+gReQAOQtYWtH0A7UlxcAa2hpr+txNBwGqtpFsR6L
 // rotation is an edit to a list rather than a redesign under pressure.
 var RetiredSigningPublicKeys []string
 
+// RevokedKey is a key whose signatures are no longer to be believed.
+type RevokedKey struct {
+	// Name is how it is spoken of in the verdict.
+	Name string
+	// Key is the minisign public key.
+	Key string
+	// Because is why — "CI secret exposed in run 42067525642", an advisory
+	// identifier, a date. ⛔ A REVOCATION WITHOUT A REASON IS A RUMOUR. The
+	// person reading "this bottle is signed by a revoked key" has to decide
+	// what to do about an artefact they may already be running, and "we
+	// revoked it" tells them nothing about whether that matters.
+	Because string
+}
+
+// RevokedSigningKeys are keys that were OURS and are no longer trusted —
+// compromised, exfiltrated, or signed something we did not authorise.
+//
+// ⛔⛔ REVOKING IS NOT RETIRING, AND THE DIFFERENCE IS THE WHOLE POINT OF
+// HAVING BOTH. A retired key is one we stopped signing WITH; everything it
+// signed is still ours and still true. A revoked key is one somebody else
+// may have held, so NOTHING it signed can be distinguished from a forgery —
+// including bottles it signed perfectly legitimately before the compromise.
+//
+// ⛔ AND WE CANNOT TELL THE TWO APART, BECAUSE THERE IS NO DATE. Every
+// published bottle carries the same pinned timestamp, so "was this signed
+// before the key leaked?" has no answer on the artefact. A scheme that
+// honoured signatures made "before" the revocation would be a check that
+// cannot fail, which is worse than no check: it would restore trust in
+// exactly the artefacts an attacker would plant.
+//
+// So a revoked key's signature counts for NOTHING — and is reported, loudly
+// and separately from a stranger's. A stranger signing our bottle is noise
+// anybody can make; our own revoked key on a bottle is a fact about our
+// supply chain that the reader has to act on.
+//
+// The remedy for a revoked key is to rebuild and re-sign, not to argue. That
+// is expensive, which is why it is a different list from the retired one and
+// why entries carry a reason.
+var RevokedSigningKeys []RevokedKey
+
 // Signature referrer conventions.
 const (
 	// ArtifactTypeSignature marks a cosign signature referrer manifest.

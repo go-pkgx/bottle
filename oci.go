@@ -586,11 +586,12 @@ func (c *OCIClient) SignaturesOfDigest(project, ver, osn, arch, digest string) (
 	if err != nil {
 		return SignatureReport{}, err
 	}
-	names, untrusted, err := trust.Count(digest, atts)
+	names, untrusted, revoked, err := trust.count(digest, atts)
 	if err != nil {
 		return SignatureReport{}, fmt.Errorf("bottle: %s v%s (%s/%s): %w", project, ver, osn, arch, err)
 	}
-	return SignatureReport{Signers: names, Untrusted: untrusted, Malformed: malformed, Threshold: trust.Threshold}, nil
+	return SignatureReport{Signers: names, Untrusted: untrusted, Malformed: malformed,
+		Revoked: revoked, Threshold: trust.Threshold}, nil
 }
 
 // SignaturesOfTag reports who signed the bottle published under one tag,
@@ -645,11 +646,12 @@ func (c *OCIClient) ProvenanceOfTag(project, tag, osn, arch string) (SignatureRe
 	if err != nil {
 		return SignatureReport{}, "", err
 	}
-	names, untrusted, err := trust.Count(man.Layers[0].Digest.String(), atts)
+	names, untrusted, revoked, err := trust.count(man.Layers[0].Digest.String(), atts)
 	if err != nil {
 		return SignatureReport{}, "", fmt.Errorf("bottle: %s %s (%s/%s): %w", project, tag, osn, arch, err)
 	}
-	rep := SignatureReport{Signers: names, Untrusted: untrusted, Malformed: malformed, Threshold: trust.Threshold}
+	rep := SignatureReport{Signers: names, Untrusted: untrusted, Malformed: malformed,
+		Revoked: revoked, Threshold: trust.Threshold}
 	return rep, c.builderFrom(ctx, repo, refs), nil
 }
 
