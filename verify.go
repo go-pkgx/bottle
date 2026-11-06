@@ -35,6 +35,28 @@ func VerifyRequired() bool {
 // trust.go; everything that verifies a bottle goes through LoadTrustSet.
 var SigningPublicKey = "RWQ+rmH+fXy2iYr+gReQAOQtYWtH0A7UlxcAa2hpr+txNBwGqtpFsR6L"
 
+// RetiredSigningPublicKeys are keys this project HAS signed with and still
+// trusts, newest first, as `name:key` entries.
+//
+// ⛔⛔ RETIRING A KEY MUST NOT INVALIDATE WHAT IT SIGNED. A signature is a
+// statement about bytes, made at a moment; replacing the key we sign WITH
+// says nothing about the bottles already signed. A trust set that dropped
+// the old key would refuse the whole published registry overnight — and
+// since the fix for a lost or compromised key is to rotate, a design where
+// rotation breaks everything is a design where nobody rotates.
+//
+// ⛔ AND THEY ARE NOT EXPIRED BY DATE, BECAUSE THERE IS NO DATE TO EXPIRE
+// THEM BY. Every published bottle carries the same pinned timestamp so that
+// re-publishing is byte-identical, so "was this signed before the key was
+// retired?" is a question nothing on the artefact can answer. Pretending
+// otherwise would be a check that cannot fail. A key leaves this list only
+// when a human decides its signatures are no longer to be believed — which
+// is a withdrawal of trust, a different and louder act than rotation.
+//
+// Empty today: nothing has been rotated yet. It is here so the first
+// rotation is an edit to a list rather than a redesign under pressure.
+var RetiredSigningPublicKeys []string
+
 // Signature referrer conventions.
 const (
 	// ArtifactTypeSignature marks a cosign signature referrer manifest.

@@ -96,6 +96,55 @@ func TestLoadTrustSetDefault(t *testing.T) {
 	}
 }
 
+// ⛔⛔ ROTATION MUST NOT INVALIDATE WHAT THE OLD KEY SIGNED. If retiring a key
+// dropped it from the default trust set, the whole published registry would
+// stop verifying the day we rotate — and since rotation is the answer to a
+// lost or compromised key, a design where it breaks everything is one where
+// nobody rotates.
+func TestRetiredKeysStayTrusted(t *testing.T) {
+	current, old := mustGenerate(t), mustGenerate(t)
+	pinKey(t, current)
+	oldRetired := RetiredSigningPublicKeys
+	RetiredSigningPublicKeys = []string{"go-zpkg-2025:" + old.PublicKeyString()}
+	t.Cleanup(func() { RetiredSigningPublicKeys = oldRetired })
+	newTrustEnv(t, nil)
+
+	ts, err := LoadTrustSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(ts.Names(), ","); got != DefaultSignerName+",go-zpkg-2025" {
+		t.Fatalf("trust set = %q, want the current key and the retired one", got)
+	}
+
+	const digest = "sha256:aa"
+	// A bottle signed only by the RETIRED key still verifies.
+	names, untrusted, err := ts.Count(digest, []Attestation{signFor(t, old, digest, false)})
+	if err != nil || untrusted != 0 || strings.Join(names, ",") != "go-zpkg-2025" {
+		t.Errorf("a bottle signed by the retired key: names=%v untrusted=%d err=%v", names, untrusted, err)
+	}
+
+	// ⛔ AND AN OVERLAP BOTTLE COUNTS AS TWO. During a rotation the publisher
+	// signs with both; a scheme that discounted the retired key would make
+	// that look like one signer and a threshold of two unmeetable exactly
+	// while rotating.
+	names, _, err = ts.Count(digest, []Attestation{
+		signFor(t, current, digest, true),
+		signFor(t, old, digest, true),
+	})
+	if err != nil || len(names) != 2 {
+		t.Errorf("overlap bottle: names=%v err=%v", names, err)
+	}
+
+	// A typo in the retired list is skipped, not fatal: the current key must
+	// keep working, because without it there is nothing to trust at all.
+	RetiredSigningPublicKeys = []string{"broken:not-a-key", "go-zpkg-2025:" + old.PublicKeyString()}
+	ts, err = LoadTrustSet()
+	if err != nil || len(ts.Signers) != 2 {
+		t.Errorf("an unparseable retired entry took out the set: %v %v", ts.Names(), err)
+	}
+}
+
 func TestLoadTrustSetReplaceAndExtend(t *testing.T) {
 	ours, alice := mustGenerate(t), mustGenerate(t)
 	pinKey(t, ours)

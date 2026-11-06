@@ -243,10 +243,31 @@ type TrustSet struct {
 	Threshold int
 }
 
-// DefaultTrustSet is the project's own key, threshold 1.
+// DefaultTrustSet is the project's CURRENT key plus every key it has retired,
+// threshold 1.
 //
-// It reads SigningPublicKey at call time rather than at init, because that
-// variable is the seam tests swap to sign with a throwaway key.
+// ⛔⛔ THE RETIRED ONES ARE IN IT, AND THAT IS WHAT MAKES ROTATION POSSIBLE AT
+// ALL. Rotating is how you answer a lost or compromised key; if rotating also
+// invalidated every bottle the old key signed, the registry would go dark the
+// day it was most needed and nobody would ever rotate. A signature is a
+// statement about bytes; changing the key we sign WITH says nothing about
+// what is already signed.
+//
+// ⛔ THEY ARE NOT RANKED AND NOT DATED. Verify counts DISTINCT keys, so a
+// bottle signed by the current key and an old one counts as two — which is
+// exactly right during an overlap, where the same publisher deliberately
+// signs with both. A scheme that discounted retired keys would make an
+// overlap bottle look like one signer, and a threshold of two unmeetable
+// precisely while rotating.
+//
+// It reads the variables at call time rather than at init, because
+// SigningPublicKey is the seam tests swap to sign with a throwaway key.
+//
+// ⛔ AN UNPARSEABLE RETIRED ENTRY IS SKIPPED, NOT FATAL. It is a compiled-in
+// typo in a list that grows by hand, and refusing to build any trust set
+// over it would take out verification entirely — including for the current
+// key, which is fine. The current key is the one whose failure returns an
+// empty set, because without it there is nothing to trust.
 func DefaultTrustSet() TrustSet {
 	s, err := ParseSigner(DefaultSignerName + ":" + SigningPublicKey)
 	if err != nil {
@@ -255,7 +276,13 @@ func DefaultTrustSet() TrustSet {
 		// plainly rather than passing.
 		return TrustSet{Threshold: DefaultThreshold}
 	}
-	return TrustSet{Signers: []Signer{s}, Threshold: DefaultThreshold}
+	signers := []Signer{s}
+	for _, entry := range RetiredSigningPublicKeys {
+		if r, err := ParseSigner(entry); err == nil {
+			signers = append(signers, r)
+		}
+	}
+	return TrustSet{Signers: dedupeSigners(signers), Threshold: DefaultThreshold}
 }
 
 // LoadTrustSet builds the trust set from the environment (or ~/.zpkg/config.hcl2,
