@@ -144,6 +144,46 @@ registry: a name on the artefact is written by whoever pushed it. The referrer
 carries only a key id, which is checkable, and which is used to pick which key
 to try first — never to decide which may succeed.
 
+## Rotating a key, and revoking one
+
+Three states, and the difference between the last two is the whole reason
+there are two lists:
+
+| | signs | counts towards the threshold | reported as |
+| --- | --- | --- | --- |
+| `SigningPublicKey` — **current** | yes | yes | its name |
+| `RetiredSigningPublicKeys` — **retired** | no | **yes** | its name |
+| `RevokedSigningKeys` — **revoked** | no | **no** | named, with the reason |
+
+**Retiring** is changing the key you sign *with*. It says nothing about what
+is already signed, so a retired key stays in the trust set and nothing needs
+re-signing. Rotation is an edit to two variables: the new key goes up, the old
+one moves down.
+
+And a retired key is **not discounted**: a bottle signed by the current key
+and a retired one counts as *two*. That is exactly right during an overlap,
+where the publisher deliberately signs with both — a scheme that ranked
+retired keys lower would make a threshold of 2 unmeetable precisely while
+rotating.
+
+**Revoking** is saying somebody else may hold the key. Nothing it signed can
+be told from a forgery, so its signatures count for nothing — including on
+bottles it signed legitimately before the compromise.
+
+⛔ **And they cannot be told apart by date, because there is no date.** Every
+published bottle carries the same pinned timestamp so that a re-publish is
+byte-identical, so *"was this signed before the key leaked?"* has no answer on
+the artefact. Honouring signatures made "before" a revocation would be a check
+that cannot fail — and it would restore trust in exactly the artefacts an
+attacker would plant. Whether to buy that distinction with a third-party
+timestamp is
+[bottle#215](https://github.com/go-zpkg/bottle/issues/215).
+
+A revoked signature is reported **as itself**, not folded into "signed by an
+untrusted key". A stranger's signature is noise anybody can make; your own
+revoked key on a bottle is a fact about your supply chain. Every entry carries
+a `Because`, because a revocation without a reason is a rumour.
+
 ## What a project NAME may be
 
 A name is a name. It is not a path and it is not a URL fragment — and it
