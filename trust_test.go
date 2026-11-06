@@ -17,12 +17,22 @@ func newTrustEnv(t *testing.T, m map[string]string) {
 	setLookup(m)
 }
 
-// pinKey points the compiled-in signing key at a throwaway one.
+// pinKey makes the DEFAULT TRUST SET be exactly this throwaway key.
+//
+// ⛔ IT CLEARS THE RETIRED AND REVOKED LISTS TOO, and that is the whole
+// point of the helper. Swapping only SigningPublicKey left the production
+// lists in place, so the first real rotation — go-zpkg-until-2026-11 landing
+// in RetiredSigningPublicKeys — broke three tests that had every right to
+// assume the set held one key. A helper that isolates one of three globals
+// isolates nothing.
 func pinKey(t *testing.T, kp *sign.Keypair) {
 	t.Helper()
-	old := SigningPublicKey
+	oldKey, oldRetired, oldRevoked := SigningPublicKey, RetiredSigningPublicKeys, RevokedSigningKeys
 	SigningPublicKey = kp.PublicKeyString()
-	t.Cleanup(func() { SigningPublicKey = old })
+	RetiredSigningPublicKeys, RevokedSigningKeys = nil, nil
+	t.Cleanup(func() {
+		SigningPublicKey, RetiredSigningPublicKeys, RevokedSigningKeys = oldKey, oldRetired, oldRevoked
+	})
 }
 
 func mustGenerate(t *testing.T) *sign.Keypair {

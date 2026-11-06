@@ -160,6 +160,24 @@ is already signed, so a retired key stays in the trust set and nothing needs
 re-signing. Rotation is an edit to two variables: the new key goes up, the old
 one moves down.
 
+This has happened once, on **2026-11-06**:
+
+| key id | state | what it signed |
+| --- | --- | --- |
+| `df35c3a46931d3e6` | current | everything from 2026-11-06 |
+| `3eae61fe7d7cb689` | retired, as `go-zpkg-until-2026-11` | every bottle before it |
+
+⛔ **Retired and not revoked, which was a judgement and not a finding.** The
+old key's private half could not be located — two scans of the maintainer's
+workstation covered 2,167,120 files, and what sat in the CI secret turned out
+to be its *public* half. **Lost is not compromised**: nothing suggests anybody
+else holds it, so everything it signed stays trusted and nothing is rebuilt.
+If evidence of compromise ever appears it moves to `RevokedSigningKeys`, and
+then it does.
+
+`rotation_test.go` pins both key ids as literals, so neither variable can
+change without a test saying so.
+
 And a retired key is **not discounted**: a bottle signed by the current key
 and a retired one counts as *two*. That is exactly right during an overlap,
 where the publisher deliberately signs with both — a scheme that ranked

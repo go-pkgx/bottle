@@ -33,7 +33,7 @@ func VerifyRequired() bool {
 // accept is a TrustSet — this key unless the operator says otherwise, plus
 // whatever ZPKG_EXTRA_TRUSTED_KEYS adds, and a threshold over the lot. See
 // trust.go; everything that verifies a bottle goes through LoadTrustSet.
-var SigningPublicKey = "RWQ+rmH+fXy2iYr+gReQAOQtYWtH0A7UlxcAa2hpr+txNBwGqtpFsR6L"
+var SigningPublicKey = "RWTfNcOkaTHT5lsudyEtExOI45lQQEHCu+fckxlKljWtzfuFTQtgjLZT"
 
 // RetiredSigningPublicKeys are keys this project HAS signed with and still
 // trusts, newest first, as `name:key` entries.
@@ -53,9 +53,19 @@ var SigningPublicKey = "RWQ+rmH+fXy2iYr+gReQAOQtYWtH0A7UlxcAa2hpr+txNBwGqtpFsR6L
 // when a human decides its signatures are no longer to be believed — which
 // is a withdrawal of trust, a different and louder act than rotation.
 //
-// Empty today: nothing has been rotated yet. It is here so the first
-// rotation is an edit to a list rather than a redesign under pressure.
-var RetiredSigningPublicKeys []string
+// ⛔ `go-zpkg-until-2026-11` IS RETIRED, NOT REVOKED, AND THE DISTINCTION IS
+// A JUDGEMENT WE MADE RATHER THAN A FACT WE FOUND. Its private half could
+// not be located: two scans of the maintainer's workstation covered
+// 2,167,120 files and found no key, and what sat in the CI secret turned out
+// to be its PUBLIC half. Lost is not compromised — nothing suggests anybody
+// else holds it — so everything it signed stays trusted and nothing needs
+// rebuilding. If evidence of compromise ever appears, it moves to
+// RevokedSigningKeys and that changes.
+//
+// It signed every bottle in the registry up to 2026-11-06.
+var RetiredSigningPublicKeys = []string{
+	"go-zpkg-until-2026-11:RWQ+rmH+fXy2iYr+gReQAOQtYWtH0A7UlxcAa2hpr+txNBwGqtpFsR6L",
+}
 
 // RevokedKey is a key whose signatures are no longer to be believed.
 type RevokedKey struct {
